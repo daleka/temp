@@ -1,0 +1,3166 @@
+GuiTop = -2;
+GuiLeft = 500;
+GuirelativePoint = "TOPLEFT";
+InitComplite= false;
+LastTarget = nil;
+HelperEnabled = true;
+SpellCodes={}
+Timers = {}
+NEEDOFF = false;
+NEEDON = false;
+CacheArr = {
+    ["UnitAura"] = {},
+    ["UnitHealth"] = {},
+    ["UnitPower"] = {},
+    ["PlayerCD"] = {},
+    ["UnitGetIncomingHeals"] = {},
+    ["SortUnitsByHP"] = {},
+};
+CacheSpellIDs = {};
+CacheSpellNames = {};
+CacheUnitInRange = {};
+CacheNameplatesInRange = {}
+CacheUnitCasting = {}
+CacheUnitChannel = {}
+b_LastPosition = {
+    ["x"] = "0",
+    ["y"] = "0",
+    ["t"] = GetTime(),
+};
+b_LastSpeed = {0,0,0};
+playerGuid = UnitGUID("player");
+b_LastTarget = {playerGuid,playerGuid};
+b_LastTargetEnemy = {false,false};
+b_LastFakeTarget = "player";
+b_LastBattleStart = 0;
+b_MessageMode = 1;
+TotemLatency = 0;
+LastActiveTotem = {
+    [1] = 0,
+    [2] = 0,
+    [3] = 0,
+    [4] = 0,
+}
+LastTotemTimeLeft = {
+    [1] = 0,
+    [2] = 0,
+    [3] = 0,
+    [4] = 0,
+}
+PrevLastTotemTimeLeft = {
+    [1] = 0,
+    [2] = 0,
+    [3] = 0,
+    [4] = 0,
+}
+
+EnemyPlayerIn = {}
+EnemyPlayerOut = {}
+EnemyPartyIn = {}
+EnemyPartyOut = {}
+EnemyLastSeen = {}
+EnemyWithDot = {}
+EnemyPlayerPVPIn = {}
+EnemyPlayerPVPOut = {}
+EnemyCountSpellDamage = {}
+FriendCountSpellHeal = {}
+TargetNotBehind = {}
+TargetNotInFront = {}
+TargetUnitNotInFront = {}
+TargetWallBlock = {}
+TargetImmune = {}
+PlayerStuned = 0;
+PlayerSilenced = 0;
+PlayerNotInControl = 0;
+UnitMissFromUnit = {}
+UnitMissToUnit = {}
+PlayerTalents = {}
+PlayerSpellBook = {}
+
+UpdateCacheInterval = 0.08;
+
+RunTimeStamp = GetTime()
+
+local versionClientNew = 0;
+local versionClientOld = 0;
+
+local version, build, date, tocversion = GetBuildInfo();
+if (string.find(version, "^1%.")) then
+    --classic_era since 11300
+    if (tocversion >= 11300) then
+        versionClientNew = 1;
+    else
+        versionClientOld = 1;
+    end
+elseif (string.find(version, "^2%.")) then
+    --bcc since 20500
+    if (tocversion >= 20500) then
+        versionClientNew = 2;
+    else
+        versionClientOld = 2;
+    end
+elseif (string.find(version, "^3%.")) then
+    --wotlkc since 30400
+    if (tocversion >= 30400) then
+        versionClientNew = 3;
+    else
+        versionClientOld = 3;
+    end
+elseif (string.find(version, "^4%.")) then
+    --cata since 40400?
+    if (tocversion >= 40400) then
+        versionClientNew = 4;
+    else
+        versionClientOld = 4;
+    end
+elseif (string.find(version, "^5%.")) then
+    --mop since 50500?
+    if (tocversion >= 50500) then
+        versionClientNew = 5;
+    else
+        versionClientOld = 5;
+    end
+elseif (string.find(version, "^6%.")) then
+    --wod since 60300?
+    if (tocversion >= 60300) then
+        versionClientNew = 6;
+    else
+        versionClientOld = 6;
+    end
+elseif (string.find(version, "^7%.")) then
+    --legion since 70400?
+    if (tocversion >= 70400) then
+        versionClientNew = 7;
+    else
+        versionClientOld = 7;
+    end
+elseif (string.find(version, "^8%.")) then
+    --bfa since 80400?
+    if (tocversion >= 80400) then
+        versionClientNew = 8;
+    else
+        versionClientOld = 8;
+    end
+elseif (string.find(version, "^9%.")) then
+    --sl since 90300?
+    if (tocversion >= 90300) then
+        versionClientNew = 9;
+    else
+        versionClientOld = 9;
+    end
+else
+    versionClientNew = tonumber(string.match(version,"^%d+"));
+end
+
+function checkVersionOld(startVersion,endVersion)
+	if startVersion == nil then return false; end
+    if endVersion == nil then
+        return (versionClientOld >= startVersion);
+    else
+        return (versionClientOld >= startVersion and versionClientOld <= endVersion);
+    end
+end
+
+function checkVersionNew(startVersion,endVersion)
+	if startVersion == nil then return false; end
+    if endVersion == nil then
+        return (versionClientNew >= startVersion);
+    else
+        return (versionClientNew >= startVersion and versionClientNew <= endVersion);
+    end
+end
+
+function getCacheTimeKey()
+    local nowRaw = GetTime();
+    return (nowRaw - (nowRaw % UpdateCacheInterval))*1000;
+end
+
+local function pairsByKeys(t, f)
+    local a = {}
+    for n in pairs(t) do tinsert(a, n) end
+    sort(a, f)
+    local i = 0
+    local iter = function ()
+        i = i + 1
+        if a[i] == nil then
+            return nil
+        else
+            return a[i], t[a[i]]
+        end
+    end
+    return iter
+end
+
+function MyPrint(...)
+    local out = ""
+    for i=1,select("#", ...) do
+        if i > 1 then
+            out = out .. ", "
+        end
+        out = out .. tostring(select(i, ...))
+    end
+    DEFAULT_CHAT_FRAME:AddMessage("|cff999999" .. out .. "|r")
+end
+
+function StringHash(text)
+    local counter = 1
+    local len = string.len(text)
+    for i = 1, len, 3 do 
+        counter = math.fmod(counter*8161, 4294967279) +  -- 2^32 - 17: Prime!
+            (string.byte(text,i)*16776193) +
+            ((string.byte(text,i+1) or (len-i+256))*8372226) +
+            ((string.byte(text,i+2) or (len-i+256))*3932164)
+    end
+    return math.fmod(counter, 4294967291) -- 2^32 - 5: Prime (and different from the prime in the loop)
+end
+
+function IsHarmUnit(unit)
+    return UnitCanAttack("player", unit)
+end
+function IsFriendUnit(unit)
+    return UnitCanAssist("player", unit)
+end
+
+function MyGetSpellID(spellName,spellRank)
+    local spellID;
+    local spellLink;
+    if spellRank == nil then 
+        spellRank = "";
+    end
+    if CacheSpellIDs[spellName.."_"..spellRank] == nil then
+        if spellRank == "" then
+            spellLink = GetSpellLink(spellName);
+        else
+            spellLink = GetSpellLink(spellName,spellRank);
+        end
+        if spellLink ~= nil then
+            spellID = tonumber(spellLink:match("spell:(%d+)"));
+            if spellID == nil then
+                spellID = string.match(spellName,"^%s*(.-)%s*$");
+            end
+        else
+            spellID = string.match(spellName,"^%s*(.-)%s*$");
+        end
+        CacheSpellIDs[spellName.."_"..spellRank] = spellID;
+    else
+        spellID = CacheSpellIDs[spellName.."_"..spellRank];
+    end
+    return spellID;
+end
+
+function MyGetSpellName(spellID)
+    local spellName;
+    if CacheSpellNames[spellID] == nil then
+        spellName = GetSpellInfo(spellID);
+        if spellName == nil then
+            spellName = spellID
+        end
+        CacheSpellNames[spellID] = spellName;
+    else
+        spellName = CacheSpellNames[spellID];
+    end
+    return spellName;
+end
+
+local function MyGetUnitSpeed()
+    local sumSpeed = 0;
+    local flagZero = false;
+    local key, max = 1, b_LastSpeed[1]
+    for k, v in ipairs(b_LastSpeed) do
+        if b_LastSpeed[k] > max then
+            key, max = k, v
+        end
+    end
+    return max;
+end
+
+local function MyGetUnitSpeedUpdate()
+    local newX, newY = GetPlayerMapPosition("player");
+    local newT = GetTime();
+    local newDT = newT-b_LastPosition["t"];
+    if newDT > 0.2 then
+      local newPath = math.sqrt(((b_LastPosition["x"]-newX)*1.5)^2+((b_LastPosition["y"]-newY))^2);
+      local newSpeed = math.floor(((newPath/newDT)*1000000)/75);
+      b_LastPosition["x"] = newX;
+      b_LastPosition["y"] = newY;
+      b_LastPosition["t"] = newT;
+      table.remove(b_LastSpeed, 1);
+      table.insert(b_LastSpeed, newSpeed);
+    end
+end
+
+function ItemInList(item,list)
+    for _,v in pairs(list) do
+        if v == item then
+            return true;
+        end
+    end
+    return false;
+end
+
+function BindSpellBook(list)
+    numTabs = GetNumSpellTabs();
+    for i=1,numTabs do
+        local TabName,_,offset,numSpells = GetSpellTabInfo(i);
+        for i2=offset+1,offset + numSpells do
+            name,rank,icon,cost,powertype,isfunnel,casttime,minrange,maxrange = GetSpellInfo(i2, TabName);
+            if not ItemInList(name,list) then
+                table.insert(list,name)
+            end
+        end
+    end
+    return list;
+end
+
+if not GetUnitSpeed then
+    GetUnitSpeed = MyGetUnitSpeed
+end
+
+if not print then
+    print = MyPrint
+end
+
+if not UnitPower then
+    UnitPower = UnitMana
+end
+
+if not UnitPowerMax then
+    UnitPowerMax = UnitManaMax
+end
+
+if not UnitCastingInfo then
+    UnitCastingInfo = CastingInfo;
+end
+
+if not UnitChannelInfo then
+    UnitChannelInfo = ChannelInfo;
+end
+
+MyUnitHealth = function(Unit)
+    if CacheArr["UnitHealth"][Unit] == nil then
+        CacheArr["UnitHealth"][Unit] = {};
+    end
+    if CacheArr["UnitHealth"][Unit]["Health"] == nil then
+        CacheArr["UnitHealth"][Unit]["Health"] = UnitHealth(Unit);
+        return CacheArr["UnitHealth"][Unit]["Health"];
+    else
+        return CacheArr["UnitHealth"][Unit]["Health"];
+    end
+end
+
+MyUnitHealthMax = function(Unit)
+    if CacheArr["UnitHealth"][Unit] == nil then
+        CacheArr["UnitHealth"][Unit] = {};
+    end
+    if CacheArr["UnitHealth"][Unit]["HealthMax"] == nil then
+        CacheArr["UnitHealth"][Unit]["HealthMax"] = UnitHealthMax(Unit);
+        return CacheArr["UnitHealth"][Unit]["HealthMax"];
+    else
+        return CacheArr["UnitHealth"][Unit]["HealthMax"];
+    end
+end
+
+MyUnitPower = function(Unit, Type)
+    if Type == nil then
+        Type = 0;
+    end
+    if CacheArr["UnitPower"][Unit] == nil then
+        CacheArr["UnitPower"][Unit] = { Type = {} };
+    end
+    if CacheArr["UnitPower"][Unit][Type] == nil then
+        CacheArr["UnitPower"][Unit][Type] = {};
+    end
+    if CacheArr["UnitPower"][Unit][Type]["Power"] == nil then
+        CacheArr["UnitPower"][Unit][Type]["Power"] = UnitPower(Unit, Type);
+        return CacheArr["UnitPower"][Unit][Type]["Power"];
+    else
+        return CacheArr["UnitPower"][Unit][Type]["Power"];
+    end
+end
+
+MyUnitPowerMax = function(Unit, Type)
+    if Type == nil then
+        Type = 0;
+    end
+    if CacheArr["UnitPower"][Unit] == nil then
+        CacheArr["UnitPower"][Unit] = {};
+    end
+    if CacheArr["UnitPower"][Unit][Type] == nil then
+        CacheArr["UnitPower"][Unit][Type] = {};
+    end
+    if CacheArr["UnitPower"][Unit][Type]["PowerMax"] == nil then
+        CacheArr["UnitPower"][Unit][Type]["PowerMax"] = UnitPowerMax(Unit, Type);
+        return CacheArr["UnitPower"][Unit][Type]["PowerMax"];
+    else
+        return CacheArr["UnitPower"][Unit][Type]["PowerMax"];
+    end
+end
+
+MyUnitGetIncomingHeals = function(Unit, healer)
+    local IncomingHeals = 0;
+    if healer == nil then
+        healer = "all";
+    end
+    if not UnitGetIncomingHeals then
+        return IncomingHeals;
+    else
+        if CacheArr["UnitGetIncomingHeals"][Unit] == nil then
+            CacheArr["UnitGetIncomingHeals"][Unit] = {};
+        end
+        if CacheArr["UnitGetIncomingHeals"][Unit][healer] == nil then
+            if healer == "all" then
+                IncomingHeals = UnitGetIncomingHeals(Unit);
+            else
+                IncomingHeals = UnitGetIncomingHeals(Unit, healer);
+            end
+            CacheArr["UnitGetIncomingHeals"][Unit][healer] = IncomingHeals;
+            return CacheArr["UnitGetIncomingHeals"][Unit][healer];
+        else
+            return CacheArr["UnitGetIncomingHeals"][Unit][healer];
+        end
+    end
+end
+
+local FriendItems  = {
+    [2] = {
+        37727, -- Ruby Acorn
+    },
+    [3] = {
+        42732, -- Everfrost Razor
+    },
+    [5] = {
+        8149, -- Voodoo Charm
+        136605, -- Solendra's Compassion
+        63427, -- Worgsaw
+    },
+    [8] = {
+        34368, -- Attuned Crystal Cores
+        33278, -- Burning Torch
+    },
+    [10] = {
+        32321, -- Sparrowhawk Net
+        17626, -- Frostwolf Muzzle
+    },
+    [15] = {
+        1251, -- Linen Bandage
+        2581, -- Heavy Linen Bandage
+        3530, -- Wool Bandage
+        3531, -- Heavy Wool Bandage
+        6450, -- Silk Bandage
+        6451, -- Heavy Silk Bandage
+        8544, -- Mageweave Bandage
+        8545, -- Heavy Mageweave Bandage
+        14529, -- Runecloth Bandage
+        14530, -- Heavy Runecloth Bandage
+        21990, -- Netherweave Bandage
+        21991, -- Heavy Netherweave Bandage
+        34721, -- Frostweave Bandage
+        34722, -- Heavy Frostweave Bandage
+        38643, -- Thick Frostweave Bandage
+        38640, -- Dense Frostweave Bandage
+    },
+    [20] = {
+        21519, -- Mistletoe
+    },
+    [25] = {
+        31463, -- Zezzak's Shard
+        13289, -- Egan's Blaster
+    },
+    [30] = {
+        1180, -- Scroll of Stamina
+        1478, -- Scroll of Protection II
+        3012, -- Scroll of Agility
+        1712, -- Scroll of Spirit II
+        2290, -- Scroll of Intellect II
+        1711, -- Scroll of Stamina II
+        34191, -- Handful of Snowflakes
+    },
+    [35] = {
+        18904, -- Zorbin's Ultra-Shrinker
+    },
+    [40] = {
+        34471, -- Vial of the Sunwell
+    },
+    [45] = {
+        32698, -- Wrangling Rope
+    },
+    [60] = {
+        32825, -- Soul Cannon
+        37887, -- Seeds of Nature's Wrath
+    },
+    [70] = {
+        41265, -- Eyesore Blaster
+    },
+    [80] = {
+        35278, -- Reinforced Net
+    },
+    [100] = {
+        41058, -- Hyldnir Harpoon
+    },
+    [150] = {
+        46954, -- Flaming Spears
+    },
+}
+
+if (checkVersionOld(5) or checkVersionNew(5)) then
+    FriendItems[1] = {
+        90175, -- Gin-Ji Knife Set -- doesn't seem to work for pets (always returns nil)
+    }
+end
+if (checkVersionOld(7) or checkVersionNew(7)) then
+    FriendItems[4] = {
+        129055, -- Shoe Shine Kit
+    }
+end
+if (checkVersionOld(4) or checkVersionNew(4)) then
+    FriendItems[7] = {
+        61323, -- Ruby Seeds
+    }
+end
+if (checkVersionOld(7) or checkVersionNew(7)) then
+    FriendItems[38] = {
+        140786, -- Ley Spider Eggs
+    }
+end
+if (checkVersionOld(5) or checkVersionNew(5)) then
+    FriendItems[55] = {
+        74637, -- Kiryn's Poison Vial
+    }
+end
+if (checkVersionOld(6) or checkVersionNew(6)) then
+    FriendItems[50] = {
+        116139, -- Haunting Memento
+    }
+end
+if (checkVersionOld(7) or checkVersionNew(7)) then
+    FriendItems[90] = {
+        133925, -- Fel Lash
+    }
+end
+if (checkVersionOld(5) or checkVersionNew(5)) then
+    FriendItems[200] = {
+        75208, -- Rancher's Lariat
+    }
+end
+
+local HarmItems = {
+    [1] = {
+    },
+    [2] = {
+        37727, -- Ruby Acorn
+    },
+    [3] = {
+        42732, -- Everfrost Razor
+    },
+    [5] = {
+        8149, -- Voodoo Charm
+        136605, -- Solendra's Compassion
+        63427, -- Worgsaw
+    },
+    [8] = {
+        34368, -- Attuned Crystal Cores
+        33278, -- Burning Torch
+    },
+    [10] = {
+        32321, -- Sparrowhawk Net
+        17626, -- Frostwolf Muzzle
+    },
+    [15] = {
+        33069, -- Sturdy Rope
+    },
+    [20] = {
+        10645, -- Gnomish Death Ray
+    },
+    [25] = {
+        24268, -- Netherweave Net
+        31463, -- Zezzak's Shard
+        13289, -- Egan's Blaster
+    },
+    [30] = {
+        835, -- Large Rope Net
+        7734, -- Six Demon Bag
+        34191, -- Handful of Snowflakes
+    },
+    [35] = {
+        24269, -- Heavy Netherweave Net
+        18904, -- Zorbin's Ultra-Shrinker
+        41509, -- Frostweave Net
+    },
+    [40] = {
+        28767, -- The Decapitator
+    },
+    [45] = {
+        32698, -- Wrangling Rope
+        23836, -- Goblin Rocket Launcher
+    },
+    [60] = {
+        32825, -- Soul Cannon
+        37887, -- Seeds of Nature's Wrath
+    },
+    [70] = {
+        41265, -- Eyesore Blaster
+    },
+    [80] = {
+        35278, -- Reinforced Net
+    },
+    [100] = {
+        33119, -- Malister's Frost Wand
+    },
+    [150] = {
+        46954, -- Flaming Spears
+    },
+}
+
+if (checkVersionOld(7) or checkVersionNew(7)) then
+    HarmItems[4] = {
+        129055, -- Shoe Shine Kit
+    }
+end
+if (checkVersionOld(4) or checkVersionNew(4)) then
+    HarmItems[7] = {
+        61323, -- Ruby Seeds
+    }
+end
+if (checkVersionOld(7) or checkVersionNew(7)) then
+    HarmItems[38] = {
+        140786, -- Ley Spider Eggs
+    }
+end
+if (checkVersionOld(6) or checkVersionNew(6)) then
+    HarmItems[50] = {
+        116139, -- Haunting Memento
+    }
+end
+if (checkVersionOld(5) or checkVersionNew(5)) then
+    HarmItems[55] = {
+        74637, -- Kiryn's Poison Vial
+    }
+end
+if (checkVersionOld(7) or checkVersionNew(7)) then
+    HarmItems[90] = {
+        133925, -- Fel Lash
+    }
+end
+if (checkVersionOld(5) or checkVersionNew(5)) then
+    HarmItems[200] = {
+        75208, -- Rancher's Lariat
+    }
+end
+
+function MyUnitInItemRange(Unit)
+    local itemList = nil;
+    if IsHarmUnit(Unit) then
+        itemList = HarmItems;
+    elseif IsFriendUnit(Unit) then
+        itemList = FriendItems;
+	end
+
+    if itemList == nil then return 1000; end
+    for range, items in pairsByKeys(itemList) do
+        for i = 1, #items do
+            local item = items[i]
+            local name = GetItemInfo(item)
+            if name then
+                local res = IsItemInRange(item, Unit);
+                if res ~= nil and res ~= 0 and res ~= false then
+                    return range;
+                end
+            end
+        end
+    end
+    return 1000;
+end
+
+function MyUnitDistanceRaw(Unit)
+    local interactRange = 1000;
+    if (UnitExists(Unit)) then
+        local itemRange = MyUnitInItemRange(Unit);
+	    if CheckInteractDistance(Unit, 3) then interactRange = 10
+	    elseif CheckInteractDistance(Unit, 2) then interactRange = 11
+	    elseif CheckInteractDistance(Unit, 4) then interactRange = 28
+	    elseif UnitInRange(Unit) then interactRange = 40 end
+        if itemRange < interactRange then interactRange = itemRange; end
+    end
+    return interactRange;
+end
+
+function MyUnitDistance(Unit)
+    local range = 1000;
+    local now = getCacheTimeKey();
+    if (CacheUnitInRange[now] == nil) then
+        CacheUnitInRange = {
+            [now] = {}
+        };
+    end
+    if (CacheUnitInRange[now][Unit] ~= nil) then
+        range = CacheUnitInRange[now][Unit];
+    else
+        range = MyUnitDistanceRaw(Unit);
+        CacheUnitInRange[now][Unit] = range;
+    end
+    return range;
+end
+
+function MyNameplatesInRangeRaw(unitType,range,onlyPlayer)
+    local count = 0;
+    if checkVersionOld(7) or checkVersionNew(7) then
+        for i = 1, #C_NamePlate.GetNamePlates() do
+            local Unit = "nameplate"..i
+            if (UnitExists(Unit)) then
+                if (unitType == "harm" and IsHarmUnit(Unit) and MyUnitDistance(Unit) <= range and ((UnitIsPlayer(Unit) and onlyPlayer) or not onlyPlayer )) then count = count + 1; end
+                if (unitType == "friend" and IsFriendUnit(Unit) and MyUnitDistance(Unit) <= range and ((UnitIsPlayer(Unit) and onlyPlayer) or not onlyPlayer )) then count = count + 1; end
+            end
+        end
+    end
+    return count;
+end
+
+function MyNameplatesInRange(unitType,range,onlyPlayer)
+    local count = 0;
+    local now = getCacheTimeKey();
+    if (CacheNameplatesInRange[now] == nil) then
+        CacheNameplatesInRange = {
+            [now] = {}
+        };
+    end
+    if (CacheNameplatesInRange[now][unitType] ~= nil) then
+        count = CacheNameplatesInRange[now][unitType];
+    else
+        count = MyNameplatesInRangeRaw(unitType,range);
+        CacheNameplatesInRange[now][unitType] = count;
+    end
+    return count;
+end
+
+function b_Log(Text, IsInfo)
+    if (b_MessageMode == 1 and IsInfo) then print(Text); end
+    if (b_MessageMode == 0) then print(Text); end
+end
+
+function ReCalcTimers(elapsed)
+    function ReCalcTime(Time, elapsed)
+        if (Time == nil) then
+            return nil;
+        end
+        
+        if (Time ~= 0) then
+            Time = Time - elapsed;
+        end
+        
+        if (Time <= 0) then
+            Time = nil;
+        end
+        
+        return Time;
+    end
+
+
+    table.foreach(Timers, function(k,v) Timers[k] = ReCalcTime(Timers[k], elapsed) end);
+
+    GuirelativePoint, _, _, GuiLeft, GuiTop = GuiFrame:GetPoint()
+end
+
+local SettedBindings = { }
+local LastProcessTime = GetTime()
+local TimeSinceLastUpdate = 0;
+local UpdateInterval = 0.12;
+if (UpdateInterval > UpdateCacheInterval) then UpdateCacheInterval = UpdateInterval; end
+function bdps_OnUpdate(self, elapsed)
+    local now = GetTime()
+    if ((now - RunTimeStamp) < 1) then return ; end
+    
+    elapsed = now - LastProcessTime;
+    LastProcessTime = now
+
+    if (not InitComplite) then
+        Init();
+    end	
+
+    ReCalcTimers(elapsed);
+    UpdateGUI();
+
+    if NEEDOFF and Timers["NEEDOFF"] == nil then
+            NEEDOFF = false;
+            HelperEnabled = false;
+    end
+
+    if NEEDON and Timers["NEEDON"] == nil then
+            NEEDON = false;
+            HelperEnabled = true;
+    end
+
+    TimeSinceLastUpdate = TimeSinceLastUpdate + elapsed;
+    
+    if (TimeSinceLastUpdate > UpdateInterval) then
+        TimeSinceLastUpdate = TimeSinceLastUpdate % UpdateInterval;
+        updateenemies();
+        updateenemieswithdots();
+        MainScan();
+    end
+end
+
+function RemoveBindings()
+    -- /run print(GetBinding(5)) /run print(GetNumBindings())
+    for i=1,GetNumBindings(),1 do
+        local command, key1, key2, key3;
+        if checkVersionOld(1,5) then
+            command, key1, key2, key3 = GetBinding(i);
+        else
+            command, _, key1, key2, key3 = GetBinding(i);
+        end
+
+        if (key1) then SettedBindings[key1] = command; b_Log(command.." "..key1) end
+        if (key2) then SettedBindings[key2] = command; b_Log(command.." "..key2) end
+        if (key3) then SettedBindings[key3] = command; b_Log(command.." "..key3) end
+    end
+
+                
+    for i1, key in ipairs(blackdps_keys) do
+        for i2, Prefix in ipairs(blackdps_Mods) do
+            local HotKey = Prefix..key;
+            local action = GetBindingByKey(HotKey)		
+
+            if (action ~= nil) then
+                if ((string.find(action, "BlackDpsMacro") ~= nil) or (string.find(action, "BlackDpsBcc") ~= nil)) then
+                    b_Log("clear "..HotKey..": "..action)
+                    SetBinding(HotKey, nil)
+                end
+            end
+        end
+    end
+
+end
+
+function Init()
+
+        InitComplite= true;
+        b_Log("Старт системы поддержки решения", true);
+        if (checkVersionNew(1,1)) then
+            AttemptToSaveBindings(GetCurrentBindingSet());
+        else
+            SaveBindings(GetCurrentBindingSet());
+        end
+        RemoveBindings();
+        CreateControlButtons();
+        if (checkVersionNew(1,1)) then
+            AttemptToSaveBindings(GetCurrentBindingSet());
+        else
+            SaveBindings(GetCurrentBindingSet());
+        end
+        CreateGUI();
+        InitCommands();
+        if (checkVersionNew(1,1)) then
+            AttemptToSaveBindings(GetCurrentBindingSet());
+        else
+            SaveBindings(GetCurrentBindingSet());
+        end
+        b_Log("Инициализация завершена", true);
+        
+        b_Log("Состояние переключателей:", true);
+
+        FTumblerState("F1", F1Tumbler);
+        FTumblerState("F2", F2Tumbler);
+        FTumblerState("F3", F3Tumbler);
+        FTumblerState("F4", F4Tumbler);
+        FTumblerState("M", AutoMountTumbler);
+        FTumblerState("F", FindlyaTumbler);
+        FTumblerState("A", AutoAttackTumbler);
+        
+        InitPower();
+end
+
+
+function InitPower()
+    if checkVersionNew(1,1) then
+        --classic_era power types
+        SPELL_POWER_MANA = Enum.PowerType.Mana;
+        SPELL_POWER_RAGE = Enum.PowerType.Rage;
+        SPELL_POWER_ENERGY = Enum.PowerType.Energy;
+        SPELL_POWER_COMBO_POINTS = Enum.PowerType.ComboPoints;
+        SPELL_POWER_HAPPINESS = Enum.PowerType.Happiness;
+    elseif checkVersionNew(2,2) then
+        --bcc power types
+        SPELL_POWER_MANA = Enum.PowerType.Mana;
+        SPELL_POWER_RAGE = Enum.PowerType.Rage;
+        SPELL_POWER_ENERGY = Enum.PowerType.Energy;
+        SPELL_POWER_COMBO_POINTS = Enum.PowerType.ComboPoints;
+        SPELL_POWER_HAPPINESS = Enum.PowerType.Happiness;
+    elseif checkVersionNew(3,3) then
+        --wotlkc power types
+        SPELL_POWER_MANA = Enum.PowerType.Mana;
+        SPELL_POWER_RAGE = Enum.PowerType.Rage;
+        SPELL_POWER_ENERGY = Enum.PowerType.Energy;
+        SPELL_POWER_COMBO_POINTS = Enum.PowerType.ComboPoints;
+        SPELL_POWER_HAPPINESS = Enum.PowerType.Happiness;
+        SPELL_POWER_RUNES = Enum.PowerType.Runes;
+        SPELL_POWER_RUNIC_POWER = Enum.PowerType.RunicPower;
+        SPELL_POWER_HOLY_POWER = Enum.PowerType.HolyPower;
+    elseif checkVersionNew(4,4) then
+        --cata power types
+        SPELL_POWER_MANA = Enum.PowerType.Mana;
+        SPELL_POWER_RAGE = Enum.PowerType.Rage;
+        SPELL_POWER_FOCUS = Enum.PowerType.Focus;
+        SPELL_POWER_ENERGY = Enum.PowerType.Energy;
+        SPELL_POWER_COMBO_POINTS = Enum.PowerType.ComboPoints;
+        SPELL_POWER_RUNES = Enum.PowerType.Runes;
+        SPELL_POWER_RUNIC_POWER = Enum.PowerType.RunicPower;
+        SPELL_POWER_SOUL_SHARDS = Enum.PowerType.SoulShards;
+        SPELL_POWER_ECLIPSE = Enum.PowerType.LunarPower;
+        SPELL_POWER_HOLY_POWER = Enum.PowerType.HolyPower;
+    elseif checkVersionNew(5,5) then
+        --mop power types
+        SPELL_POWER_MANA = Enum.PowerType.Mana;
+        SPELL_POWER_RAGE = Enum.PowerType.Rage;
+        SPELL_POWER_FOCUS = Enum.PowerType.Focus;
+        SPELL_POWER_ENERGY = Enum.PowerType.Energy;
+        SPELL_POWER_COMBO_POINTS = Enum.PowerType.ComboPoints;
+        SPELL_POWER_RUNES = Enum.PowerType.Runes;
+        SPELL_POWER_RUNIC_POWER = Enum.PowerType.RunicPower;
+        SPELL_POWER_SOUL_SHARDS = Enum.PowerType.SoulShards;
+        SPELL_POWER_ECLIPSE = Enum.PowerType.LunarPower;
+        SPELL_POWER_HOLY_POWER = Enum.PowerType.HolyPower;
+        SPELL_POWER_CHI = Enum.PowerType.Chi;
+        --SPELL_POWER_SHADOW_ORBS = ;
+        --SPELL_POWER_BURNING_EMBERS = ;
+        --SPELL_POWER_DEMONIC_FURY = ;
+    elseif checkVersionNew(6,6) then
+        --wod power types
+        SPELL_POWER_MANA = Enum.PowerType.Mana;
+        SPELL_POWER_RAGE = Enum.PowerType.Rage;
+        SPELL_POWER_FOCUS = Enum.PowerType.Focus;
+        SPELL_POWER_ENERGY = Enum.PowerType.Energy;
+        SPELL_POWER_COMBO_POINTS = Enum.PowerType.ComboPoints;
+        SPELL_POWER_RUNES = Enum.PowerType.Runes;
+        SPELL_POWER_RUNIC_POWER = Enum.PowerType.RunicPower;
+        SPELL_POWER_SOUL_SHARDS = Enum.PowerType.SoulShards;
+        SPELL_POWER_ECLIPSE = Enum.PowerType.LunarPower;
+        SPELL_POWER_HOLY_POWER = Enum.PowerType.HolyPower;
+        SPELL_POWER_CHI = Enum.PowerType.Chi;
+        --SPELL_POWER_SHADOW_ORBS = ;
+        --SPELL_POWER_BURNING_EMBERS = ;
+        --SPELL_POWER_DEMONIC_FURY = ;
+    elseif (checkVersionOld(8) or checkVersionNew(7)) then
+        --Enum.PowerType.Alternate
+        SPELL_POWER_MANA = Enum.PowerType.Mana;
+        SPELL_POWER_RAGE = Enum.PowerType.Rage;
+        SPELL_POWER_FOCUS = Enum.PowerType.Focus;
+        SPELL_POWER_ENERGY = Enum.PowerType.Energy;
+        SPELL_POWER_COMBO_POINTS = Enum.PowerType.ComboPoints;
+        SPELL_POWER_RUNES = Enum.PowerType.Runes;
+        SPELL_POWER_RUNIC_POWER = Enum.PowerType.RunicPower;
+        SPELL_POWER_SOUL_SHARDS = Enum.PowerType.SoulShards;
+        --backward compatibility for SPELL_POWER_ECLIPSE
+        SPELL_POWER_ECLIPSE = Enum.PowerType.LunarPower;
+        SPELL_POWER_HOLY_POWER = Enum.PowerType.HolyPower;
+        SPELL_POWER_CHI = Enum.PowerType.Chi;
+        --SPELL_POWER_SHADOW_ORBS = ;
+        --SPELL_POWER_BURNING_EMBERS = ;
+        --SPELL_POWER_DEMONIC_FURY = ;
+        SPELL_POWER_PAIN = Enum.PowerType.Pain;
+        SPELL_POWER_FURY = Enum.PowerType.Fury;
+        SPELL_POWER_LUNAR_POWER = Enum.PowerType.LunarPower;
+        SPELL_POWER_MAELSTROM = Enum.PowerType.Maelstrom;
+        SPELL_POWER_INSANITY = Enum.PowerType.Insanity;
+        SPELL_POWER_ARCANE_CHARGES = Enum.PowerType.ArcaneCharges;
+    end
+end
+
+local lasts1 = 0;
+
+function ResizeCMD()
+        --local s1 = 768/string.match(({GetScreenResolutions()})[GetCurrentResolution()], "%d+x(%d+)");
+        local s1 = 3.0*GetScreenHeight()/1100;
+        if s1 == lasts1 then return end
+        cmdbtn0:SetWidth(s1)
+        cmdbtn0:SetHeight(s1)
+        cmdbtn1:SetWidth(s1)
+        cmdbtn1:SetHeight(s1)
+        cmdbtn1:SetPoint("TOPLEFT", s1, 0)		
+        lasts1 = s1
+end
+
+
+local Findlya = false;
+function MainScan()
+    if checkVersionNew(1,1) then
+        if (b_LastTarget[1] ~= playerGuid or b_LastTarget[2] ~= playerGuid) then
+            if (not UnitExists("target")) then
+                b_LastTarget = {playerGuid,playerGuid};
+                b_LastTargetEnemy = {false,false};
+            end
+        end
+        
+        if (UnitExists("target") and UnitGUID("target") ~= b_LastTarget[2]) then
+            b_LastTarget[1] = b_LastTarget[2];
+            b_LastTarget[2] = UnitGUID("target");
+            b_LastTargetEnemy[1] = b_LastTargetEnemy[2];
+            b_LastTargetEnemy[2] = UnitCanAttack("player", "target");
+        end
+    end
+
+    if (Timers["LastTarget"] == nil) then
+        LastTarget = nil;
+    end
+
+    if (UnitAffectingCombat("player")) then
+        Findlya = true;
+    end
+
+    if FindlyaTumbler then
+        if (checkVersionOld(4) or checkVersionNew(4)) then
+            -- works since Cataclysm
+            if (UnitCastingInfo("player")=="Собиратель трофеев") or (GetItemLastCD("Собиратель трофеев") > 2) then
+                Findlya = false;
+            end
+        end
+    end
+
+    if (not HelperEnabled) then
+        txtCommand:SetTextColor(0.5, 0.5, 0.5);
+        txtCommand:SetText("-");
+        return; 
+    end
+    ResizeCMD()
+
+    CacheArr = {
+        ["UnitAura"] = {},
+        ["UnitHealth"] = {},
+        ["UnitPower"] = {},
+        ["PlayerCD"] = {},
+        ["UnitGetIncomingHeals"] = {},
+        ["SortUnitsByHP"] = {},
+    };
+    local spell, target, code = SpellSelector();
+
+    
+    -- get last target on classic
+    if checkVersionNew(1,1) then
+        if (b_LastFakeTarget ~= "player") then
+            if (not UnitExists("target")) then
+                b_LastFakeTarget = "player";
+            end
+        end
+        if not FindlyaTumbler then
+            if (UnitExists("target")) then
+                if UnitAffectingCombat("player") then
+                    if (b_LastFakeTarget ~= "target" and b_LastTargetEnemy[1] and ((spell == nil) or (target ~= nil and target ~= "target" and UnitGUID(target) ~= b_LastTarget[2] and (UnitCanAttack("player", "target") == false) and (UnitCanAttack("player", target) == false)))) then
+                        spell = "Прошлая цель";
+                        target = "target";
+                    end
+                end
+            end
+        end
+        if (UnitExists(target) and target ~= b_LastFakeTarget) then
+            b_LastFakeTarget = target;
+        end
+    end
+
+    if (spell == nil and target == nil and code ~= nil) then
+        SendData(nil, nil, code);
+        txtCommand:SetTextColor(1, 1, 1);
+        txtCommand:SetText("Code: "..code);
+        --Timers["ShowSpell"] = 1.5;		
+        return;
+    end
+
+    if (spell ~= nil and GetSpellInfo(spell) ~= nil and UnitChannelInfo("player") == GetSpellInfo(spell)) then
+        spell = nil;
+        target = nil;
+    end
+
+    if FindlyaTumbler then
+        if (checkVersionOld(4) or checkVersionNew(4)) then
+            -- works since Cataclysm
+            if ((spell == nil) and (not UnitAffectingCombat("player")) and Findlya and (UnitCastingInfo("player")== nil) and (GetUnitSpeed("player") == 0)) then
+                spell = "Собиратель трофеев";
+                target = "player";
+            end
+        end
+    end
+
+
+    if AutoAttackTumbler then
+        if ((spell == nil) and (not UnitIsDeadOrGhost("target")) and (not IsCurrentSpell(6603)) and ((MyIsSpellInRange(75, "target") == 1) or CheckInteractDistance("target", 3)) and IsHarmUnit("target")) then
+            spell = "Автоатака";
+            target = "target";
+        end
+    end
+
+
+    if (spell == nil) then
+        if (Timers["ShowSpell"] == nil) then
+            txtCommand:SetTextColor(0.5, 0.5, 0.5);
+            txtCommand:SetText("-");
+        end
+    else
+        spellname = GetSpellInfo(spell);
+        txtCommand:SetTextColor(1, 1, 1);
+        if (spellname ~= nil) then
+            txtCommand:SetText(target..": "..spellname);
+        else
+            txtCommand:SetText(target..": "..spell);
+        end
+        --Timers["ShowSpell"] = 1.5;		
+    end	
+
+    if (true and spell ~= nil and IsCurrentSpell(spell)) then
+        b_Log("jojo skip")
+        SendData(nil, nil, nil);
+        return
+    end
+
+    if (target ~= nil) then
+        LastTarget = target;
+        Timers["LastTarget"] = 1;
+    end
+
+    local TargetSpell = nil;
+    if (checkVersionOld(1,1) or checkVersionNew(1,1)) then
+        if ((target ~= nil) and (UnitGUID(target) ~= UnitGUID("target"))) then
+            TargetSpell = "Focus"..target;	
+        end
+    else
+        if ((target ~= nil) and (UnitGUID(target) ~= UnitGUID("focus"))) then
+            TargetSpell = "Focus"..target;	
+        end
+    end
+
+    SendData(TargetSpell, spell, code);
+
+    if (spell == nil) then
+        AutoMount();
+    end
+end
+
+function checkPlayerTalent(talent)
+    if (talent == nil or PlayerTalents[talent] == nil) then return false; end
+    return PlayerTalents[talent];
+end
+
+-- Update Talents
+function UpdateTalents()
+    PlayerTalents = {};
+    if (checkVersionOld(1,4) or checkVersionNew(1,4)) then
+        for i = 1, GetNumTalentTabs() do
+            for j = 1, GetNumTalents(i) do
+                local name, iconTexture, tier, column, rank = GetTalentInfo(i, j);
+                if (rank > 0) then
+                    PlayerTalents[i.."_"..tier.."_"..column] = true;
+                    PlayerTalents[name] = true;
+                end
+            end
+        end
+    elseif (checkVersionOld(5,5) or checkVersionNew(5,5)) then
+        local specID = GetSpecialization();
+        for i = 1, GetNumTalents() do
+            local name, texture, tier, column, selected = GetTalentInfo(i);
+            if (selected) then
+                PlayerTalents[specID.."_"..tier.."_"..column] = true;
+                PlayerTalents[name] = true;
+            end
+        end
+    elseif (checkVersionOld(6,6) or checkVersionNew(6,6)) then
+        local specID = GetSpecialization();
+        local specGroupIndex = GetActiveSpecGroup();
+        for tier = 1, MAX_TALENT_TIERS do
+            for column = 1, NUM_TALENT_COLUMNS do
+                local talentID, name, texture, selected = GetTalentInfo(tier, column, specGroupIndex)
+                if (selected) then
+                    PlayerTalents[specID.."_"..tier.."_"..column] = true;
+                    PlayerTalents[name] = true;
+                end
+            end
+        end
+    else
+        -- PVE Talents since version7 with spellID
+        if (checkVersionOld(7,9) or checkVersionNew(7,9)) then
+            local specGroupIndex = GetActiveSpecGroup()
+            for tier = 1, MAX_TALENT_TIERS do
+                for column = 1, NUM_TALENT_COLUMNS do
+                    local talentID, name, texture, selected, available, spellID = GetTalentInfo(tier, column, specGroupIndex)
+                    if (selected) then
+                        PlayerTalents[tostring(spellID)] = true;
+                    end
+                end
+            end
+        else
+            local lConfigID = C_ClassTalents.GetActiveConfigID();
+            if lConfigID then
+                local lConfigInfo = C_Traits.GetConfigInfo(lConfigID);
+                if lConfigInfo then
+                    local lTreeIDs = lConfigInfo["treeIDs"];
+                    if lTreeIDs then
+                        for i = 1, #lTreeIDs do
+                            for _, lNodeID in pairs(C_Traits.GetTreeNodes(lTreeIDs[i])) do
+                                local lNodeInfo = C_Traits.GetNodeInfo(lConfigID, lNodeID);
+                                if lNodeInfo then
+                                    local activeEntry = lNodeInfo.activeEntry;
+                                    local activeRank = lNodeInfo.activeRank;
+                                    if ( activeEntry and activeRank > 0 ) then
+                                        local activeEntryID = activeEntry.entryID;
+                                        local lEntryInfo = C_Traits.GetEntryInfo(lConfigID,activeEntryID);
+                                        local lDefinitionID = lEntryInfo["definitionID"];
+                                        local lDefinitionInfo = C_Traits.GetDefinitionInfo(lDefinitionID);
+                                        local spellID = lDefinitionInfo["spellID"];
+                                        PlayerTalents[tostring(spellID)] = true;
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        -- PVP Talents since version7 with spellID
+        if (checkVersionOld(7,7) or checkVersionNew(7,7)) then
+            local specGroupIndex = GetActiveSpecGroup()
+            for tier = 1, MAX_PVP_TALENT_TIERS do
+                for column = 1, MAX_PVP_TALENT_COLUMNS do
+                    local talentID, name, texture, selected, available, spellID = GetPvpTalentInfo(tier, column, specGroupIndex)
+                    if (selected) then
+                        PlayerTalents[tostring(spellID)] = true;
+                    end
+                end
+            end
+        else
+            for slotN, talentID in ipairs(C_SpecializationInfo.GetAllSelectedPvpTalentIDs()) do
+                local _, talentName, _, _, _, spellID = GetPvpTalentInfoByID(talentID);
+                PlayerTalents[tostring(spellID)] = true;
+            end
+        end
+    end
+end
+
+function MyRaidRole(unit)
+    if checkVersionOld(1,3) then
+        local isTank, isHealer, isDamage = UnitGroupRolesAssigned(unit);
+        if(isTank) then
+            return "TANK";
+        elseif(isHealer) then
+            return "HEALER";
+        elseif(isDamage) then
+            return "DAMAGER";
+        else
+            return "NONE";
+        end
+    elseif checkVersionNew(1,1) then
+        return "NONE";
+    else
+        return UnitGroupRolesAssigned(unit);
+    end
+end
+
+function MyRangeCheck(value, RangeBracket1, RangeBracket2, RangeValue1, RangeValue2)
+    if (RangeBracket1 == '(' and value <= RangeValue1) then return false; end
+    if (RangeBracket1 == '[' and value < RangeValue1) then return false; end
+    if (RangeBracket2 == ')' and value >= RangeValue2) then return false; end
+    if (RangeBracket2 == ']' and value > RangeValue2) then return false; end
+    return true;
+end
+
+function AutoMount()
+    if (checkVersionOld(6) or checkVersionNew(6)) then
+        -- works since Draenor
+        if (UnitCastingInfo("player")~= nil) and ((Timers["antimount"] == nil) or (Timers["antimount"] < 1)) then
+            Timers["antimount"] = 1.5;
+        end
+
+        if (IsMounted()) then
+            Timers["antimount"] = 2;
+        end
+
+
+        if (AutoMountTumbler and (Timers["antimount"] == nil) and (GetLootMethod() ~= nil) and (GetUnitSpeed("player") == 0) and (not UnitAffectingCombat("player")) and IsOutdoors() and (not IsMounted())) then
+            if (C_MountJournal.Summon ~= nil) then
+                C_MountJournal.Summon(0)
+            else
+                C_MountJournal.SummonByID(0)
+            end
+        end
+    end
+end
+
+function CreateFontString(x, y, text)
+    NewFontString = GuiFrame:CreateFontString(nil, "OVERLAY")
+    NewFontString:SetFont("Fonts\\FRIZQT__.TTF", 14, "OUTLINE")
+    NewFontString:SetPoint("TOPLEFT", GuiFrame, "TOPLEFT", x, y);
+    NewFontString:SetText(text);
+    return NewFontString;
+end
+
+GuiFrame = nil;
+function CreateGUI()
+    if checkVersionOld(1,8) or checkVersionNew(1,1) then
+        GuiFrame = CreateFrame("Frame", "AnimorHistoryFrame", UIParent);
+    else
+        GuiFrame = CreateFrame("Frame", nil, UIParent, BackdropTemplateMixin and "BackdropTemplate");
+    end
+    GuiFrame:SetMovable(true)
+    GuiFrame:EnableMouse(true)
+    GuiFrame:RegisterForDrag("LeftButton")
+    GuiFrame:SetScript("OnDragStart", GuiFrame.StartMoving)
+    GuiFrame:SetScript("OnDragStop", GuiFrame.StopMovingOrSizing)
+
+    GuiFrame.width  = 208
+    GuiFrame.height = 48
+    GuiFrame:SetFrameStrata("HIGH")
+    if checkVersionOld(2,2) then
+        GuiFrame:SetWidth(GuiFrame.width);
+        GuiFrame:SetHeight(GuiFrame.height);
+    else
+        GuiFrame:SetSize(GuiFrame.width, GuiFrame.height)
+    end
+    GuiFrame:SetPoint(GuirelativePoint, UIParent, GuirelativePoint, GuiLeft, GuiTop)
+    GuiFrame:SetBackdrop({
+        bgFile   = "Interface/Tooltips/UI-Tooltip-Background",
+        edgeFile = "Interface/Tooltips/UI-Tooltip-Border",
+        tile     = true,
+        tileSize = 12,
+        edgeSize = 12,
+        insets   = { left = 2, right = 2, top = 2, bottom = 2 }
+    })
+    GuiFrame:SetBackdropColor(0, 0, 0, 1)
+    HelperEnabledColorInverter = false;
+
+    txtF1Tumbler = CreateFontString(6, -6, "F1");
+    txtF2Tumbler = CreateFontString(28, -6, "F2");
+    txtF3Tumbler = CreateFontString(50, -6, "F3");
+    txtF4Tumbler = CreateFontString(72, -6, "F4");
+    txtAutoMountTumbler = CreateFontString(100, -6, "M");
+    txtFindlyaTumbler = CreateFontString(120, -6, "F");
+    txtAutoAttackTumbler  = CreateFontString(136, -6, "A");
+    txtEnemyCount  = CreateFontString(160, -6, "0");
+
+    txtCommand = CreateFontString(6, -26, "-");
+    txtCommand:SetTextColor(0.5, 0.5, 0.5);
+end
+
+function UpdateGUI()
+    if checkVersionOld(1,2) then MyGetUnitSpeedUpdate(); end
+    if (HelperEnabled) then
+        GuiFrame:SetBackdropColor(0, 0, 0, 1);
+    else
+        if (Timers["HelperEnabledColorInverter"] == nil) then
+            Timers["HelperEnabledColorInverter"] = 0.6;
+            HelperEnabledColorInverter = not HelperEnabledColorInverter;
+        end
+        if (HelperEnabledColorInverter) then
+            GuiFrame:SetBackdropColor(1, 0.05, 0.05, 1)			
+        else
+            GuiFrame:SetBackdropColor(0, 0, 0, 1)		
+        end
+    end
+    UpdateTumblerColor(txtF1Tumbler, F1Tumbler);
+    UpdateTumblerColor(txtF2Tumbler, F2Tumbler);
+    UpdateTumblerColor(txtF3Tumbler, F3Tumbler);
+    UpdateTumblerColor(txtF4Tumbler, F4Tumbler);
+    UpdateTumblerColor(txtAutoMountTumbler, AutoMountTumbler);
+    UpdateTumblerColor(txtFindlyaTumbler, FindlyaTumbler);
+    UpdateTumblerColor(txtAutoAttackTumbler, AutoAttackTumbler);
+
+    txtEnemyCount:SetText(b_getenemiescount(0,0));
+
+    if (checkVersionOld(7) or checkVersionNew(1)) then
+        cmdbtn0:SetFrameStrata("TOOLTIP")
+        cmdbtn1:SetFrameStrata("TOOLTIP")
+    end
+end
+
+function UpdateTumblerColor(Tumbler, State)
+    if (State) then
+        Tumbler:SetTextColor(0, 1, 0);
+    else	
+        Tumbler:SetTextColor(0.5, 0.5, 0.5);
+    end
+end
+
+function MyUnitAura(unit, SpellName, unitCasterCheckType, mode, aurafilter)
+--mode
+--0 - RemainTime
+--1 - Count
+--2 - Stacks
+--3 - Debuff Type
+--4 - PassedTime
+
+    local stacks = 0;
+    local CacheUnitAuraArr = {
+        ["HARMFUL"] = {},
+        ["HELPFUL"] = {}
+    };
+    if CacheArr["UnitAura"][unit] ~= nil then
+        CacheUnitAuraArr = CacheArr["UnitAura"][unit];
+    else
+        -- HARMFUL
+        for i=1,40 do
+            local name, rank, icon, count, debuffType, duration, expirationTime, unitCaster, canStealOrPurge, shouldConsolidate, spellId, canApplyAura, isBossDebuff, isCastByPlayer;
+            if checkVersionOld(1,2) then
+                name, rank, icon, count, debuffType, duration, expirationTime = UnitDebuff(unit, i);
+                if not name then
+                    break
+                end
+                if CacheUnitAuraArr["HARMFUL"][string.upper(name)] == nil then
+                    CacheUnitAuraArr["HARMFUL"][string.upper(name)] = {};
+                end
+                table.insert(CacheUnitAuraArr["HARMFUL"][string.upper(name)], {
+                    ["count"] = count,
+                    ["debuffType"] = debuffType,
+                    ["duration"] = duration,
+                    ["expirationTime"] = expirationTime,
+                    ["unitCaster"] = nil
+                });
+            elseif checkVersionOld(3,7) then
+                name, rank, icon, count, debuffType, duration, expirationTime, unitCaster, canStealOrPurge, shouldConsolidate, spellId, canApplyAura, isBossDebuff, isCastByPlayer = UnitAura(unit, i, "HARMFUL");
+                if not name then
+                    break
+                end
+                if CacheUnitAuraArr["HARMFUL"][string.upper(name)] == nil then
+                    CacheUnitAuraArr["HARMFUL"][string.upper(name)] = {};
+                end
+                table.insert(CacheUnitAuraArr["HARMFUL"][string.upper(name)], {
+                    ["count"] = count,
+                    ["debuffType"] = debuffType,
+                    ["duration"] = duration,
+                    ["expirationTime"] = expirationTime,
+                    ["unitCaster"] = unitCaster
+                });
+            else
+                name, icon, count, debuffType, duration, expirationTime, unitCaster, canStealOrPurge, shouldConsolidate, spellId, canApplyAura, isBossDebuff, isCastByPlayer = UnitAura(unit, i, "HARMFUL");
+                if not name then
+                    break
+                end
+                if CacheUnitAuraArr["HARMFUL"][string.upper(name)] == nil then
+                    CacheUnitAuraArr["HARMFUL"][string.upper(name)] = {};
+                end
+                table.insert(CacheUnitAuraArr["HARMFUL"][string.upper(name)], {
+                    ["count"] = count,
+                    ["debuffType"] = debuffType,
+                    ["duration"] = duration,
+                    ["expirationTime"] = expirationTime,
+                    ["unitCaster"] = unitCaster
+                });
+            end		
+        end
+
+        --HELPFUL
+        for i=1,40 do
+            local name, rank, icon, count, debuffType, duration, expirationTime, unitCaster, canStealOrPurge, shouldConsolidate, spellId, canApplyAura, isBossDebuff, isCastByPlayer;
+            if checkVersionOld(1,2) then
+                name, rank, icon, count, duration, expirationTime = UnitBuff(unit, i);
+                if not name then
+                    break
+                end
+                if CacheUnitAuraArr["HELPFUL"][string.upper(name)] == nil then
+                    CacheUnitAuraArr["HELPFUL"][string.upper(name)] = {};
+                end
+                table.insert(CacheUnitAuraArr["HELPFUL"][string.upper(name)], {
+                    ["count"] = count,
+                    ["debuffType"] = nil,
+                    ["duration"] = duration,
+                    ["expirationTime"] = expirationTime,
+                    ["unitCaster"] = nil
+                });
+            elseif checkVersionOld(3,7) then
+                name, rank, icon, count, debuffType, duration, expirationTime, unitCaster, canStealOrPurge, shouldConsolidate, spellId, canApplyAura, isBossDebuff, isCastByPlayer = UnitAura(unit, i, "HELPFUL");
+                if not name then
+                    break
+                end
+                if CacheUnitAuraArr["HELPFUL"][string.upper(name)] == nil then
+                    CacheUnitAuraArr["HELPFUL"][string.upper(name)] = {};
+                end
+                table.insert(CacheUnitAuraArr["HELPFUL"][string.upper(name)], {
+                    ["count"] = count,
+                    ["debuffType"] = debuffType,
+                    ["duration"] = duration,
+                    ["expirationTime"] = expirationTime,
+                    ["unitCaster"] = unitCaster
+                });
+            else
+                name, icon, count, debuffType, duration, expirationTime, unitCaster, canStealOrPurge, shouldConsolidate, spellId, canApplyAura, isBossDebuff, isCastByPlayer = UnitAura(unit, i, "HELPFUL");
+                if not name then
+                    break
+                end
+                if CacheUnitAuraArr["HELPFUL"][string.upper(name)] == nil then
+                    CacheUnitAuraArr["HELPFUL"][string.upper(name)] = {};
+                end
+                table.insert(CacheUnitAuraArr["HELPFUL"][string.upper(name)], {
+                    ["count"] = count,
+                    ["debuffType"] = debuffType,
+                    ["duration"] = duration,
+                    ["expirationTime"] = expirationTime,
+                    ["unitCaster"] = unitCaster
+                });
+            end
+
+        end
+        CacheArr["UnitAura"][unit] = CacheUnitAuraArr;
+    end
+    if (mode == 0 or mode == 1 or mode == 2 or mode == 4) then
+        if CacheUnitAuraArr[aurafilter][string.upper(SpellName)] ~= nil then
+            for i2, CacheUnitAuraData in ipairs(CacheUnitAuraArr[aurafilter][string.upper(SpellName)]) do
+                if (
+                        (unitCasterCheckType == 0) or
+                        (unitCasterCheckType == 1 and CacheUnitAuraData["unitCaster"] ~= nil and UnitIsUnit("player", CacheUnitAuraData["unitCaster"])) or
+                        (unitCasterCheckType == 2 and CacheUnitAuraData["unitCaster"] ~= nil and not UnitIsUnit("player", CacheUnitAuraData["unitCaster"])) or
+                        (unitCasterCheckType == 1 and checkVersionOld(1,2)) or
+                        (unitCasterCheckType == 2 and checkVersionOld(1,2))
+                    ) then
+                        if     mode == 0 and CacheUnitAuraData["expirationTime"] ~= nil then return CacheUnitAuraData["expirationTime"] - GetTime();
+                        elseif mode == 1 and CacheUnitAuraData["count"] ~= nil then return CacheUnitAuraData["count"];
+                        elseif mode == 2 then stacks = stacks + 1;
+                        elseif mode == 4 and CacheUnitAuraData["expirationTime"] ~= nil and CacheUnitAuraData["duration"] ~= nil then return (CacheUnitAuraData["duration"] - (CacheUnitAuraData["expirationTime"] - GetTime())); end
+                end
+            end
+        end
+    end
+
+    if mode == 3 then
+        for i2, CacheUnitAuraSpellData in pairs(CacheUnitAuraArr[aurafilter]) do
+            for i3, CacheUnitAuraData in ipairs(CacheUnitAuraArr[aurafilter][i2]) do
+                if CacheUnitAuraData["debuffType"] == SpellName then return 1; end
+            end
+        end
+        
+    end
+
+    if mode == 2 then
+        return stacks;
+    end
+
+    return 0;
+end
+
+function GetDebuffRemainTime(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 0, "HARMFUL");
+end
+
+function GetDebuffCount(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 1, "HARMFUL");
+end
+
+function GetDebuffStacks(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 2, "HARMFUL");
+end
+
+function GetDebuffPassedTime(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 4, "HARMFUL");
+end
+
+function GetBuffRemainTime(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 0, "HELPFUL");
+end
+
+function GetBuffCount(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 1, "HELPFUL");
+end
+
+function GetBuffStacks(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 2, "HELPFUL");
+end
+
+function GetBuffPassedTime(unit, SpellName, unitCasterCheckType)
+    return MyUnitAura(unit, SpellName, unitCasterCheckType, 4, "HELPFUL");
+end
+
+function GetLastCD(SpellName)
+    local start, duration, enabled;
+    if CacheArr["PlayerCD"][SpellName] == nil then
+        start, duration, enabled = GetSpellCooldown(SpellName);
+        CacheArr["PlayerCD"][SpellName] = {
+            ["start"] = start,
+            ["duration"] = duration,
+            ["enabled"] = enabled,
+        };
+    else
+        start = CacheArr["PlayerCD"][SpellName]["start"];
+        duration = CacheArr["PlayerCD"][SpellName]["duration"];
+        enabled = CacheArr["PlayerCD"][SpellName]["enabled"];
+    end
+    if (start == nil) then
+        return 0;
+    end
+    if (start <= 0)  then
+        return 0;
+    end
+    return duration - (GetTime() - start);
+end
+
+function MyGetSpellCharges(SpellName)
+    if checkVersionOld(5) or checkVersionNew(1) then
+        return GetSpellCharges(SpellName);
+    else
+        return 0;
+    end
+end
+
+function CanCast(SpellName, InMoving)
+    local speed, runSpeed, flightSpeed, swimSpeed = GetUnitSpeed("player");
+    local name, rank, icon, cost, powerType, isFunnel, castTime, minRange, maxRange;
+    if (checkVersionOld(1,5)) then name, rank, icon, cost, powerType, isFunnel, castTime, minRange, maxRange = GetSpellInfo(SpellName) else name, rank, icon, castTime, minRange, maxRange = GetSpellInfo(SpellName) end
+    local start, duration, enabled = GetSpellCooldown(SpellName);
+    local usable, nomana;
+    if checkVersionOld(2,3) then usable, nomana = IsUsableSpell(name) else usable, nomana = IsUsableSpell(SpellName) end
+    return ((GetLastCD(SpellName) <= 0.35) or (duration == 0)) and (usable or (enabled and checkVersionOld(2,2))) and (not nomana) and enabled and (InMoving or not ((speed ~= 0) and (castTime > 0)));
+end
+
+function CanCastHarm(SpellName, unit, InMoving)
+    return CanCastUnit(SpellName, unit) and IsHarmUnit(unit);
+end
+
+SpellNotFound={}
+function CanCastUnit(SpellName, Unit, InMoving)
+    if (GetSpellIdInBook(SpellName) == nil) then
+        if (SpellNotFound[SpellName] == nil) then
+            b_Log("Способность "..SpellName.." не найдена в книге заклинаний", true)
+            SpellNotFound[SpellName] = 1
+        end
+        return false;
+    end
+    return UnitIsVisible(Unit) and UnitExists(Unit) and (not UnitIsDeadOrGhost(Unit)) and (Timers["WallBlock"..UnitGUID(Unit)] == nil) and (Timers["UnitNotInFront"..UnitGUID(Unit)] == nil) and CanCast(SpellName, InMoving) and (MyIsSpellInRange(SpellName, Unit) == 1);
+end
+
+function MyIsSpellInRange(SpellName, Unit)
+     if not (UnitIsVisible(Unit) and UnitExists(Unit)) then return 0; end
+
+    SpellIdInBook, BookName = GetSpellIdInBook(SpellName)
+    if (SpellIdInBook == nil) then return 0; end
+ 
+ 
+    local name, rank, icon, castTime, minRange, maxRange = GetSpellInfo(SpellName);
+    local inRange;
+    if checkVersionOld(2,3) then inRange = IsSpellInRange(name, Unit); else inRange = IsSpellInRange(SpellIdInBook, BookName, Unit); end
+    if (inRange == nil) or (inRange == 1) then
+        return 1;
+    end
+    return 0;
+end
+
+function MyGetSpecializationName()
+    local currentSpecName = "None";
+    local currentSpecPoints = 0;
+    if checkVersionOld(1,3) or checkVersionNew(1,3) then
+        for i = 1, GetNumTalentTabs() do
+            local name, _, pointsSpent = GetTalentTabInfo(i);
+            if pointsSpent > currentSpecPoints then
+                currentSpecPoints = pointsSpent;
+                currentSpecName = name;
+            end
+        end
+    elseif checkVersionOld(4,4) or checkVersionNew(4,4) then
+        local currentSpec = GetPrimaryTalentTree();
+        if (currentSpec > 0 and currentSpec < 5) then
+            currentSpecName = select(2, GetTalentTabInfo(currentSpec));
+        end
+    else
+        local currentSpec = GetSpecialization();
+        if (currentSpec > 0 and currentSpec < 5) then
+            currentSpecName = select(2, GetSpecializationInfo(currentSpec));
+        end
+    end
+    return currentSpecName;
+end
+
+function GetSpellIdInBook(SpellName)
+    if (SpellNotFound[SpellName] == nil) then
+        if PlayerSpellBook[SpellName] == nil then
+            local offset, name = GetSpellIdInBookRaw(SpellName);
+            if (offset == nil) then
+                b_Log("Способность "..SpellName.." не найдена в книге заклинаний", true)
+                SpellNotFound[SpellName] = 1
+            else
+                PlayerSpellBook[SpellName] = {
+                    ["offset"] = offset,
+                    ["name"] = name,
+                };
+                return offset,name;
+            end
+        else
+            return PlayerSpellBook[SpellName]["offset"],PlayerSpellBook[SpellName]["name"];
+        end
+    end
+end
+
+function GetSpellIdInBookRaw(SpellName)
+    if checkVersionOld(1,5) then
+        local numTabs = GetNumSpellTabs();
+        for i=1,numTabs do
+            local name,texture,offset,numSpells = GetSpellTabInfo(i);
+            for i2=offset+1,offset + numSpells do
+                nameSpell, rankSpell, _ = GetSpellInfo(i2, name);
+                if nameSpell then
+                    local spellID = MyGetSpellID(nameSpell, rankSpell);
+                    if spellID == tonumber(SpellName) or SpellName == nameSpell or SpellName == nameSpell.." "..rankSpell then return i2, name; end
+                end
+            end
+        end
+    else
+        _, _, _, _, _, _, spellID = GetSpellInfo(SpellName)
+        local numTabs = GetNumSpellTabs();
+        for i=1,numTabs do 
+            local name,texture,offset,numSpells = GetSpellTabInfo(i) 
+            for i2=offset+1,offset + numSpells do 
+                _, _, _, _, _, _, CspellID = GetSpellInfo(i2, name)
+                if CspellID == spellID then return i2, name; end
+            end
+        end
+    end
+end
+
+
+function MyCastTime(SpellName)
+    local name, rank, icon, castTime, minRange, maxRange = GetSpellInfo(SpellName)
+    if (name == nil) then
+        return 0;
+    end
+    return castTime;
+end
+
+function MyGetShapeshiftForm(CheckIndex)
+    if GetShapeshiftForm(nil) == CheckIndex  then
+        return 1;
+    else
+        return 0;
+    end
+end
+
+function MyReadyForCast(UnitTypeID, ProcessedTarget, SpellID, InMoveID)
+    local UnitTypeCheck = true;
+
+    if (UnitTypeID == 1) then
+        UnitTypeCheck = UnitCanAttack("player",  ProcessedTarget);
+    end
+
+    if (UnitTypeID == 2) then	
+        UnitTypeCheck = not UnitCanAttack("player",  ProcessedTarget);
+    end
+
+    return UnitTypeCheck and CanCastUnit(SpellID, ProcessedTarget, InMoveID);
+end
+
+
+function CheckDamagedAllyCount(Health)
+    local result = 0;
+    if UnitExists("player") and (not UnitIsDeadOrGhost("player")) and ((MyUnitHealth("player")/MyUnitHealthMax("player")*100)<=Health) then
+        result = result + 1;
+    end
+
+    if UnitExists("raid1") then
+        for i = 1, 40, 1 do
+            local Unit = "raid"..i;
+            if UnitExists(Unit) and (not UnitIsDeadOrGhost(Unit)) and ((MyUnitHealth(Unit)/MyUnitHealthMax(Unit)*100)<=Health) then
+                result = result + 1;
+            end
+        end
+    else
+        for i = 1, 4, 1 do
+            local Unit = "party"..i;
+            if UnitExists(Unit) and (not UnitIsDeadOrGhost(Unit)) and ((MyUnitHealth(Unit)/MyUnitHealthMax(Unit)*100)<=Health) then
+                result = result + 1;
+            end
+        end
+    end
+    return result;
+end
+
+
+function FSortUnitsByHP(a,b) 
+  if not UnitExists(a) and not UnitExists(b) then
+    return false
+  end
+  if not UnitExists(a) then
+    return false
+  end
+  if not UnitExists(b) then
+    return true
+  end  
+
+    return (MyUnitHealth(a)/MyUnitHealthMax(a))<(MyUnitHealth(b)/MyUnitHealthMax(b)) 
+end
+
+function SortUnitsByHP(units)
+    local hash = StringHash(table.concat(units));
+    if CacheArr["SortUnitsByHP"][hash] == nil then
+        table.sort(units, FSortUnitsByHP)
+        CacheArr["SortUnitsByHP"][hash] = units;
+    end
+    return CacheArr["SortUnitsByHP"][hash];
+end
+
+
+
+function MyUnitsCompared(unit1, unit2)
+    if (UnitGUID(unit1) == UnitGUID(unit2)) 
+    then 
+        return 1
+    else
+        return 0
+    end
+end
+
+function MyHaveTotem(slot)
+    local haveTotem, name, startTime, duration, icon = GetTotemInfo(slot);
+    if haveTotem then 
+        return 1
+    else
+        return 0
+    end
+end
+
+function MyGetTotemInfoByName(name, mode)
+    -- mode:
+    -- 1 - active
+    -- 2 - Time left
+    if mode == nil then mode = 1; end
+    if CacheArr["PlayerTotems"] == nil then
+        CacheArr["PlayerTotems"] = {};
+        for i = 1, MAX_TOTEMS do
+            local TotemTimeLeft = 0;
+            local haveTotem, totemName, startTime, duration = GetTotemInfo(i);
+            if totemName ~= "" then
+                b_Log("TotemName "..tostring(i)..": "..tostring(totemName));
+                LastActiveTotem[i] = 1;
+                if startTime > 0 and duration > 0 then
+                    LastTotemTimeLeft[i] = (startTime + duration) - GetTime();
+                    TotemTimeLeft = LastTotemTimeLeft[i] + TotemLatency;
+                end
+            else
+                if LastActiveTotem[i] == 1 then
+                    LastActiveTotem[i] = 0;
+                    local addInterval = 0.00001;
+                    local timeLeft = -0.00001;
+                    if UpdateInterval > 0 then addInterval = UpdateInterval/2 end
+                    if LastTotemTimeLeft[i] < 0 then timeLeft = LastTotemTimeLeft[i]; end
+                    TotemLatency = (TotemLatency + (0 - timeLeft) + (0 - PrevLastTotemTimeLeft[i]) + addInterval)/3;
+                    PrevLastTotemTimeLeft[i] = LastTotemTimeLeft[i];
+                end
+                LastTotemTimeLeft[i] = 0;
+            end
+            CacheArr["PlayerTotems"][i] = {
+                ["totemName"] = totemName,
+                ["haveTotem"] = haveTotem,
+                ["startTime"] = startTime,
+                ["leftTime"] = TotemTimeLeft
+            };
+        end
+    end
+    for i = 1, MAX_TOTEMS do
+        if CacheArr["PlayerTotems"][i] ~= nil then
+            if CacheArr["PlayerTotems"][i]["totemName"] == name then
+                if mode == 1 then return 1;
+                elseif mode == 2 then
+                    return (CacheArr["PlayerTotems"][i]["leftTime"]);
+                end
+            end
+        end
+    end
+    return 0
+end
+
+function CalcCastingFinish(endTime)
+    return endTime/1000 - GetTime();
+end
+
+function CalcCastingStart(startTime)
+    return GetTime() - startTime/1000;
+end
+
+function MyUnitCastingInfoRaw(unit)
+    local spell, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible = nil;
+
+    if checkVersionNew(1,1) then
+        --return only player cast info in classic_era
+        spell, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible = UnitCastingInfo(unit);
+    elseif checkVersionNew(2,2) then
+        --all units, but removed "notInterruptible" param in bcc api
+        spell, text, texture, startTime, endTime, isTradeSkill, castID = UnitCastingInfo(unit);
+        notInterruptible = false;
+    elseif checkVersionOld(1,7) then
+        spell, _, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible = UnitCastingInfo(unit);
+    else
+        spell, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible = UnitCastingInfo(unit);
+    end
+    return spell, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible;
+end
+
+function MyUnitChannelInfoRaw(unit)
+    local spell, text, texture, startTime, endTime, isTradeSkill, notInterruptible = nil;
+
+    if checkVersionNew(1,1) then
+        --return only player cast info in classic_era
+        spell, text, texture, startTime, endTime, isTradeSkill, notInterruptible = UnitChannelInfo(unit);
+    elseif checkVersionNew(2,2) then
+        --all units, but removed "notInterruptible" param in bcc api
+        spell, text, texture, startTime, endTime, isTradeSkill = UnitChannelInfo(unit);
+        notInterruptible = false;
+    elseif checkVersionOld(1,7) then
+        spell, _, text, texture, startTime, endTime, isTradeSkill, notInterruptible = UnitChannelInfo(unit);
+    else
+        spell, text, texture, startTime, endTime, isTradeSkill, notInterruptible = UnitChannelInfo(unit);
+    end
+    return spell, text, texture, startTime, endTime, isTradeSkill, notInterruptible;
+end
+
+function MyUnitCastingInfo(unit)
+    local spell, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible = nil;
+    if (CacheUnitCasting[SendDataCounter] == nil) then
+        CacheUnitCasting = {
+            [SendDataCounter] = {}
+        };
+    end
+    if (CacheUnitCasting[SendDataCounter][unit] ~= nil) then
+        spell = CacheUnitCasting[SendDataCounter][unit]["spell"];
+        text = CacheUnitCasting[SendDataCounter][unit]["text"];
+        texture = CacheUnitCasting[SendDataCounter][unit]["texture"];
+        startTime = CacheUnitCasting[SendDataCounter][unit]["startTime"];
+        endTime = CacheUnitCasting[SendDataCounter][unit]["endTime"];
+        isTradeSkill = CacheUnitCasting[SendDataCounter][unit]["isTradeSkill"];
+        castID = CacheUnitCasting[SendDataCounter][unit]["castID"];
+        notInterruptible = CacheUnitCasting[SendDataCounter][unit]["notInterruptible"];
+    else
+        spell, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible = MyUnitCastingInfoRaw(unit);
+        CacheUnitCasting[SendDataCounter][unit] = {
+            ["spell"] = spell,
+            ["text"] = text,
+            ["texture"] = texture,
+            ["startTime"] = startTime,
+            ["endTime"] = endTime,
+            ["isTradeSkill"] = isTradeSkill,
+            ["castID"] = castID,
+            ["notInterruptible"] = notInterruptible
+        };
+    end
+    return spell, text, texture, startTime, endTime, isTradeSkill, castID, notInterruptible;
+end
+
+function MyUnitChannelInfo(unit)
+    local spell, text, texture, startTime, endTime, isTradeSkill, notInterruptible = nil;
+    if (CacheUnitChannel[SendDataCounter] == nil) then
+        CacheUnitChannel = {
+            [SendDataCounter] = {}
+        };
+    end
+    if (CacheUnitChannel[SendDataCounter][unit] ~= nil) then
+        spell = CacheUnitChannel[SendDataCounter][unit]["spell"];
+        text = CacheUnitChannel[SendDataCounter][unit]["text"];
+        texture = CacheUnitChannel[SendDataCounter][unit]["texture"];
+        startTime = CacheUnitChannel[SendDataCounter][unit]["startTime"];
+        endTime = CacheUnitChannel[SendDataCounter][unit]["endTime"];
+        isTradeSkill = CacheUnitChannel[SendDataCounter][unit]["isTradeSkill"];
+        notInterruptible = CacheUnitChannel[SendDataCounter][unit]["notInterruptible"];
+    else
+        spell, text, texture, startTime, endTime, isTradeSkill, notInterruptible = MyUnitChannelInfoRaw(unit);
+        CacheUnitChannel[SendDataCounter][unit] = {
+            ["spell"] = spell,
+            ["text"] = text,
+            ["texture"] = texture,
+            ["startTime"] = startTime,
+            ["endTime"] = endTime,
+            ["isTradeSkill"] = isTradeSkill,
+            ["notInterruptible"] = notInterruptible
+        };
+    end
+    return spell, text, texture, startTime, endTime, isTradeSkill, notInterruptible;
+end
+
+function MyCastRemain(unit, CastType, checkspell, Interruptible, isRemain)
+    local spell1, text1, texture1, startTime1, endTime1, isTradeSkill1, castID1, notInterruptible1 = MyUnitCastingInfo(unit);
+    local spell2, text2, texture2, startTime2, endTime2, isTradeSkill2, notInterruptible2 = MyUnitChannelInfo(unit);
+
+    if (isRemain == nil) then isRemain = true; end
+    
+    if spell1 then b_Log("MyCastRemain: "..table.concat({tostring(spell1), tostring(text1 or 0), tostring(texture1 or 0), tostring(startTime1 or 0), tostring(endTime1 or 0), tostring(isTradeSkill1 or 0), tostring(castID1 or 0), tostring(notInterruptible1 or 0)},",")); end
+    if spell2 then b_Log("MyCastRemain: "..table.concat({tostring(spell2), tostring(text2 or 0), tostring(texture2 or 0), tostring(startTime2 or 0), tostring(endTime2 or 0), tostring(isTradeSkill2 or 0), tostring(notInterruptible2 or 0)},",")); end
+
+    if (notInterruptible1 and Interruptible) then return 0; end
+    if (notInterruptible2 and Interruptible) then return 0; end
+
+    if spell1 and (CastType == 0 or CastType == 2) and (checkspell == nil or string.upper(checkspell) == string.upper(spell1)) then
+        if isRemain then
+            return CalcCastingFinish(endTime1);
+        else
+            return CalcCastingStart(startTime1);
+        end
+    end
+    if spell2 and (CastType == 1 or CastType == 2) and (checkspell == nil or string.upper(checkspell) == string.upper(spell2)) then
+        if isRemain then
+            return CalcCastingFinish(endTime2);
+        else
+            return CalcCastingStart(startTime2);
+        end
+    end
+
+    return 0;
+end
+
+function MyRuneCD(i)
+            local start, duration, runeReady = GetRuneCooldown(i);
+            if runeReady then return 0 end
+            return (duration - (GetTime() - start))
+end
+
+function MyRunesCheck(CheckTypeID, CDTypeID)
+    local result = 0;
+    local ready = 0;
+    local incd = 0;
+    local empty = 0;
+    for i = 1, 6 do
+        if CheckTypeID == 0 or GetRuneType(i) == CheckTypeID then
+            local MyRuneCDresult = MyRuneCD(i);
+            if (MyRuneCDresult == 0) then
+                ready = ready + 1
+            else
+                local mirrorrune;
+                if i == 1 then mirrorrune = 2 end
+                if i == 2 then mirrorrune = 1 end
+                if i == 3 then mirrorrune = 4 end
+                if i == 4 then mirrorrune = 3 end
+                if i == 5 then mirrorrune = 6 end
+                if i == 6 then mirrorrune = 5 end
+                local mirrorruneRuneCDresult = MyRuneCD(mirrorrune);
+                if (mirrorruneRuneCDresult ~= 0 and mirrorruneRuneCDresult < MyRuneCDresult) then
+                    empty = empty + 1
+                else
+                    incd = incd + 1
+                end
+            end
+       end
+    end
+
+    if CDTypeID == 0 then return ready; end
+    if CDTypeID == 1 then return empty; end
+    if CDTypeID == 2 then return incd; end
+    if CDTypeID == 3 then return incd+empty; end
+    return 0;
+end
+
+ItemNotFound={};
+function GetItemLastCD(ItemName)
+    local itemName, itemLink, itemRarity, itemLevel, itemMinLevel, itemType, itemSubType, itemStackCount, itemEquipLoc, itemTexture, itemSellPrice = GetItemInfo(ItemName)
+
+    if (itemName == nil) then
+        if (ItemNotFound[ItemName] == nil) then
+            b_Log("Предмет "..ItemName.." не найден", true)
+            ItemNotFound[ItemName] = 1
+        end
+        return 9999;
+    end
+
+    local _, _, Color, Ltype, ItemId, Enchant, Gem1, Gem2, Gem3, Gem4, Suffix, Unique, LinkLvl, Name = string.find(itemLink,    "|?c?f?f?(%x*)|?H?([^:]*):?(%d+):?(%d*):?(%d*):?(%d*):?(%d*):?(%d*):?(%-?%d*):?(%-?%d*):?(%d*):?(%d*):?(%-?%d*)|?h?%[?([^%[%]]*)%]?|?h?|?r?")
+    local start, duration, enable = GetItemCooldown(ItemId);
+    if start == 0 then return 0; end
+    return duration-(GetTime()-start);
+end
+
+
+
+
+function CreateControlButtons()
+    local ButtonF1Tumbler = CreateFrame("Button", "ButtonF1Tumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F1", "ButtonF1Tumbler");	
+    SetOverrideBindingClick(UIParent, true, "F1", "ButtonF1Tumbler");
+    SettedBindings["F1"] = "ButtonF1Tumbler";
+    ButtonF1Tumbler:SetScript("OnClick", ButtonF1TumblerClick);	
+
+    local ButtonF2Tumbler = CreateFrame("Button", "ButtonF2Tumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F2", "ButtonF2Tumbler");	
+    SetOverrideBindingClick(UIParent, true, "F2", "ButtonF2Tumbler");
+    SettedBindings["F2"] = "ButtonF2Tumbler";
+    ButtonF2Tumbler:SetScript("OnClick", ButtonF2TumblerClick);	
+
+    local ButtonF3Tumbler = CreateFrame("Button", "ButtonF3Tumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F3", "ButtonF3Tumbler");	
+    SetOverrideBindingClick(UIParent, true, "F3", "ButtonF3Tumbler");
+    SettedBindings["F3"] = "ButtonF3Tumbler";
+    ButtonF3Tumbler:SetScript("OnClick", ButtonF3TumblerClick);	
+
+    local ButtonF4Tumbler = CreateFrame("Button", "ButtonF4Tumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F4", "ButtonF4Tumbler");	
+    SetOverrideBindingClick(UIParent, true, "F4", "ButtonF4Tumbler");
+    SettedBindings["F4"] = "ButtonF4Tumbler";
+    ButtonF4Tumbler:SetScript("OnClick", ButtonF4TumblerClick);	
+
+    local ButtonAutoMountTumbler = CreateFrame("Button", "ButtonAutoMountTumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F5", "ButtonAutoMountTumbler");	
+    SetOverrideBindingClick(UIParent, true, "F5", "ButtonAutoMountTumbler");
+    SettedBindings["F5"] = "ButtonAutoMountTumbler";
+    ButtonAutoMountTumbler:SetScript("OnClick", ButtonAutoMountTumblerClick);
+
+    local ButtonFindlyaTumbler = CreateFrame("Button", "ButtonFindlyaTumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F6", "ButtonFindlyaTumbler");	
+    SetOverrideBindingClick(UIParent, true, "F6", "ButtonFindlyaTumbler");
+    SettedBindings["F6"] = "ButtonFindlyaTumbler";
+    ButtonFindlyaTumbler:SetScript("OnClick", ButtonFindlyaTumblerClick);
+
+    local ButtonAutoAttackTumbler = CreateFrame("Button", "ButtonAutoAttackTumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F7", "ButtonAutoAttackTumbler");	
+    SetOverrideBindingClick(UIParent, true, "F7", "ButtonAutoAttackTumbler");
+    SettedBindings["F7"] = "ButtonAutoAttackTumbler";
+    ButtonAutoAttackTumbler:SetScript("OnClick", ButtonAutoAttackTumblerClick);
+
+    local ButtonTumbler = CreateFrame("Button", "ButtonTumbler", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F9", "ButtonTumbler");	
+    SetOverrideBindingClick(UIParent, true, "F9", "ButtonTumbler");
+    SettedBindings["F9"] = "ButtonTumbler";
+    ButtonTumbler:SetScript("OnClick", ButtonTumblerClick);	
+
+    local ButtonReloadUI = CreateFrame("Button", "ButtonReloadUI", UIParent, "SecureActionButtonTemplate");		
+    --SetBindingClick("F9", "ButtonReloadUI");
+    SetOverrideBindingClick(UIParent, true, "F9", "ButtonReloadUI");	
+    SettedBindings["F9"] = "ButtonReloadUI";
+    ButtonReloadUI:SetScript("OnClick", ButtonReloadUIClick);		
+end
+
+F1Tumbler = false;
+F2Tumbler = false;
+F3Tumbler = false;
+F4Tumbler = false;
+AutoMountTumbler = false;
+FindlyaTumbler = false;
+
+function ButtonF1TumblerClick()
+    if (F1Tumbler) then
+        F1Tumbler = false;
+    else
+        F1Tumbler = true;
+    end
+    FTumblerState("F1", F1Tumbler);
+end
+
+
+function ButtonF2TumblerClick()
+    if (F2Tumbler) then
+        F2Tumbler = false;
+    else
+        F2Tumbler = true;
+    end
+    FTumblerState("F2", F2Tumbler);
+end
+
+
+function ButtonF3TumblerClick()
+    if (F3Tumbler) then
+        F3Tumbler = false;
+    else
+        F3Tumbler = true;
+    end
+    FTumblerState("F3", F3Tumbler);
+end
+
+function ButtonF4TumblerClick()
+    if (F4Tumbler) then
+        F4Tumbler = false;
+    else
+        F4Tumbler = true;
+    end
+    FTumblerState("F4", F4Tumbler);
+end
+
+function ButtonAutoMountTumblerClick()
+    AutoMountTumbler = not AutoMountTumbler;
+    FTumblerState("AutoMount", AutoMountTumbler);
+end
+
+function ButtonFindlyaTumblerClick()
+    FindlyaTumbler = not FindlyaTumbler;
+    FTumblerState("Собиратель трофеев", FindlyaTumbler);
+end
+
+function ButtonAutoAttackTumblerClick()
+    AutoAttackTumbler = not AutoAttackTumbler;
+    FTumblerState("Автоатака", AutoAttackTumbler);
+end
+
+
+
+function FTumblerState(TumblerName, TumblerState)
+    if (TumblerState) then
+        b_Log("|cff00ff00"..TumblerName.." включен|r", true);
+    else
+        b_Log("|cff888888"..TumblerName.." отключен|r", true);
+    end
+end
+
+function ButtonTumblerClick()
+    HelperEnabled = not HelperEnabled;
+    if (HelperEnabled) then
+        b_Log("|cff00ff00Поддержка включена|r", true);
+    else
+        b_Log("|cffff0000Поддержка отключена|r", true);
+    end
+end
+
+function ButtonReloadUIClick()
+    if (UnitAffectingCombat("player")) then
+        b_Log("Нельзя перезагружать интерфейс в бою", true);
+        return;
+    end
+    ReloadUI();
+end
+
+local BindingSpells = 
+{
+
+};
+
+local BindingMacroses = 
+{
+["Собиратель трофеев"] = "/use Собиратель трофеев",
+["Автоатака"] = "/startattack",
+["Прошлая цель"] = "/targetlasttarget",
+
+};
+
+local Targets = 
+{
+    "player", "target", "mouseover", "targettarget", "party1", "party2", "party3", "party4", "party1target", "party2target", "party3target", "party4target", "pet", "arena1", "arena2", "arena3", "arena4", "arena5", "raid1", "raid2", "raid3", "raid4", "raid5", "raid6", "raid7", "raid8", "raid9", "raid10", "raid11", "raid12", "raid13", "raid14", "raid15", "raid16", "raid17", "raid18", "raid19", "raid20", "raid21", "raid22", "raid23", "raid24", "raid25", "raid26", "raid27", "raid28", "raid29", "raid30", "raid31", "raid32", "raid33", "raid34", "raid35", "raid36", "raid37", "raid38", "raid39", "raid40"
+}
+
+
+function InitCommands()
+    ButtonCounter = -1;
+    if checkVersionNew(1,1) then
+        RegisterMacros("Focusplayer", "/target player")
+    else
+        RegisterMacros("Focusplayer", "/focus player")
+    end
+    if checkVersionNew(1,1) then
+        RegisterMacros("Focustarget", "/target target")
+    else
+        RegisterMacros("Focustarget", "/focus target")
+    end
+    if checkVersionOld(2,2) then BindingSpells = BindSpellBook(BindingSpells); end
+    for i2, BindingSpell in ipairs(BindingSpells) do
+        RegisterSpell(BindingSpell, "focus");
+    end
+
+    for BindingMacrosKey, BindingMacros in pairs(BindingMacroses) do
+        RegisterMacros(BindingMacrosKey, BindingMacros);
+    end		
+
+    for i2, Target in ipairs(Targets) do
+        b_Log(Target)
+        if (Target ~= "player" and Target ~= "target") then
+            if checkVersionNew(1,1) then
+                RegisterMacros("Focus"..Target, "/target "..Target)
+            else
+                RegisterMacros("Focus"..Target, "/focus "..Target)
+            end
+        end
+    end
+end
+
+
+
+
+SendDataCounter = 1;
+function SendData(Cast1, Cast2, Code)
+    b_Log("SendDataCounter: "..SendDataCounter)
+    if (Cast1 ~= nil) then	b_Log("sending Cast1: "..Cast1) end
+    if (Cast2 ~= nil) then	b_Log("sending Cast2: "..Cast2) end
+    if (Cast2 ~= nil) then	b_SPELLCAST_SEND[Cast2] = GetTime(); end
+    local code1 = 0; -- XOR от других кодов НЕЧЕТНЫХ
+    local code2 = 0; -- XOR от других кодов ЧЕТНЫХ
+    local code3 = 0; -- Счетчик
+    local code4 = 0; -- заклинание 1
+    local code5 = 0; -- заклинание 2
+    local code6 = 0; -- спец код
+
+    SendDataCounter = SendDataCounter + 1;
+    if (SendDataCounter == 255) then SendDataCounter = 0; end
+    code3 = SendDataCounter;
+
+    if (SpellCodes[Cast1] ~= nil) then
+        code4 = SpellCodes[Cast1];
+    end
+
+    if (SpellCodes[Cast2] ~= nil) then
+        code5 = SpellCodes[Cast2];
+    end
+
+    if (Code  ~= nil) then code6 = Code; end
+
+    code1 = bit.bxor(42, code3, code5);
+    code2 = bit.bxor(42, code4, code6);
+
+    if checkVersionOld(1,6) then
+        cmd0:SetTexture(code1/255,code2/255,code3/255);	
+        cmd1:SetTexture(code4/255,code5/255,code6/255);
+    else
+        cmd0:SetColorTexture(code1/255,code2/255,code3/255);	
+        cmd1:SetColorTexture(code4/255,code5/255,code6/255);
+    end	
+end
+
+blackdps_keys = {
+            --"NUMPAD0","NUMPAD1","NUMPAD2","NUMPAD3","NUMPAD4","NUMPAD5","NUMPAD6","NUMPAD7","NUMPAD8","NUMPAD9","NUMPADDIVIDE","NUMPADMULTIPLY","NUMPADMINUS","NUMPADPLUS","NUMPADDECIMAL",
+            "T", "Y", "U", "I", "O", "P", "G", "H", "J", "K", "L", "Z", "X", "C", "V", "B", "N", "M",
+            "F2", "F3", "F5", "F6", "F7", "F8", "F9", "F10", "F11", "F12", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0"
+            } 
+
+
+blackdps_Mods = {"CTRL-", "SHIFT-", "CTRL-SHIFT-", "ALT-", "ALT-CTRL-", "ALT-SHIFT-"}
+
+ButtonCounter = -1;
+blackdpsBindingDebug = 1;
+
+function GetNewButton(SpellName)	
+    local keyscount = 0
+    for k,v in pairs(blackdps_keys) do
+         keyscount = keyscount + 1
+    end
+
+    local passed = 1
+    local HotKey = ""
+    repeat
+        passed = 1
+        ButtonCounter = ButtonCounter+1;
+        local Cell = ButtonCounter % keyscount;
+        local Mod = (ButtonCounter-Cell) / keyscount;		
+
+        HotKey = blackdps_Mods[Mod+1]..blackdps_keys[Cell+1];
+    until passed == 1
+
+    local ButtonName = "BlackDpsBcc"..ButtonCounter
+    local ButtonForSpell = CreateFrame("Button", ButtonName, UIParent, "SecureActionButtonTemplate");
+
+    --SetBindingClick(HotKey, ButtonName);
+    --temporary fix for binds on 10.0 client
+    if (checkVersionNew(10)) then
+        ButtonForSpell:RegisterForClicks("AnyUp", "AnyDown");
+    end
+    SetOverrideBindingClick(cmdbtn0, true, HotKey, ButtonName);
+
+    SpellCodes[SpellName] = ButtonCounter+1;
+    if (not string.find(SpellName, "focus")) then
+        b_Log("bind "..HotKey..": "..SpellName) end
+
+    return ButtonForSpell;
+end
+
+function RegisterSpell(SpellName, SpellTarget)
+    if SpellCodes[SpellName] ~= nil then b_Log("Пропущена повторная регистрация заклинания "..SpellName.." "..SpellTarget, true); return ; end
+    local ButtonForSpell = GetNewButton(SpellName);
+
+    ButtonForSpell:SetAttribute("type", "spell");
+    ButtonForSpell:SetAttribute("spell", GetSpellInfo(SpellName));
+    if (checkVersionNew(1,1)) then
+        ButtonForSpell:SetAttribute("unit", "target");
+    else
+        ButtonForSpell:SetAttribute("unit", SpellTarget);
+    end
+end
+
+
+function RegisterMacros(MacroName, MacroText)	
+    if SpellCodes[MacroName] ~= nil then b_Log("Пропущена повторная регистрация макроса "..MacroName, true); return ; end
+    local ButtonForSpell = GetNewButton(MacroName);
+
+    ButtonForSpell:SetAttribute("type", "macro");
+    ButtonForSpell:SetAttribute("macrotext", MacroText);	
+end
+
+SLASH_BDD1 = '/blackdps';
+function handler(msg, editbox)
+    if  string.upper(msg) == "ON" then
+        HelperEnabled = true;
+        return;
+    end
+
+    if  string.upper(msg) == "OFF" then
+        HelperEnabled = false;
+        return;
+    end
+
+    if  string.upper(msg) == "SWITCH" then
+        HelperEnabled = not HelperEnabled;
+        return;
+    end
+
+    local OnPattern = "ON (%d+)"
+    if string.find(string.upper(msg), OnPattern) then
+        Timers["NEEDOFF"] = string.upper(msg):match(OnPattern) / 1000;
+        HelperEnabled = true;
+        NEEDOFF = true;
+        return;
+    end
+
+    local OffPattern = "OFF (%d+)"
+    if string.find(string.upper(msg), OffPattern) then
+        Timers["NEEDON"] = string.upper(msg):match(OffPattern) / 1000;
+        HelperEnabled = false;
+        NEEDON = true;
+        return;
+    end
+
+    local CmdPattern = "CMD (%d+) (%a+)"
+    if string.find(string.upper(msg), CmdPattern) then
+        local duration, cmd = string.upper(msg):match(CmdPattern);
+        Timers["CMD_"..cmd] = duration / 1000;
+        b_Log("'"..cmd.."' on "..duration, true);
+        return;
+    end
+
+    local Pattern;
+
+    Pattern = "ON (.*)"
+    if string.find(string.upper(msg), Pattern) then
+        local Name = string.upper(msg):match(Pattern);
+        SwitchTumbler(Name, true)
+        return;
+    end
+
+    Pattern = "OFF (.*)"
+    if string.find(string.upper(msg), Pattern) then
+        b_Log(string.upper(msg), true);
+        local Name = string.upper(msg):match(Pattern);
+        b_Log(Name, true);
+        SwitchTumbler(Name, false)
+        return;
+    end
+
+    Pattern = "SWITCH (.*)"
+    if string.find(string.upper(msg), Pattern) then
+        local Name = string.upper(msg):match(Pattern);
+        ReversTumbler(Name)
+        return;
+    end
+
+    b_Log("неверный формат параметров макроса /blackdps", true);
+end
+
+--/BLACKDPS SWITCH F1
+--/BLACKDPS CMD 100 asd
+
+F1Tumbler = false;
+F2Tumbler = false;
+F3Tumbler = false;
+F4Tumbler = false;
+AutoMountTumbler = false;
+FindlyaTumbler = false;
+
+
+function SwitchTumbler(Name, State)
+    local Tumbler;
+    if  Name == "F1" then 
+        F1Tumbler = State
+    elseif Name == "F2" then 
+        F2Tumbler = State
+    elseif Name == "F3" then 
+        F3Tumbler = State
+    elseif Name == "F4" then 
+        F4Tumbler = State
+    elseif Name == "M" then 
+        AutoMountTumbler = State
+    elseif Name == "F" then 
+        FindlyaTumbler = State
+    elseif Name == "A" then 
+        AutoAttackTumbler = State
+    else
+        b_Log("Неизвестный переключатель "..Name, true);
+        return;
+    end
+
+    FTumblerState(Name);
+end
+
+function ReversTumbler(Name, State)
+    local Tumbler;
+    if  Name == "F1" then 
+        F1Tumbler = not F1Tumbler
+        FTumblerState(Name, F1Tumbler);
+    elseif Name == "F2" then 
+        F2Tumbler = not F2Tumbler
+        FTumblerState(Name, F2Tumbler);
+    elseif Name == "F3" then 
+        F3Tumbler = not F3Tumbler
+        FTumblerState(Name, F3Tumbler);
+    elseif Name == "F4" then 
+        F4Tumbler = not F4Tumbler
+        FTumblerState(Name, F4Tumbler);
+    elseif Name == "M" then 
+        AutoMountTumbler = not AutoMountTumbler
+        FTumblerState(Name, AutoMountTumbler);
+    elseif Name == "F" then 
+        FindlyaTumbler = not FindlyaTumbler
+        FTumblerState(Name, FindlyaTumbler);
+    elseif Name == "A" then 
+        AutoAttackTumbler = not AutoAttackTumbler
+        FTumblerState(Name, AutoAttackTumbler);
+    else
+        b_Log("Неизвестный переключатель "..Name, true);
+        return;
+    end
+end
+
+
+
+
+
+
+local CLEU_TAG_SUFFIXES = {
+    [1] = "_DAMAGE",
+    [2] = "_MISSED",
+    [3] = "_AURA_APPLIED",
+    [4] = "_AURA_APPLIED_DOSE",
+    [5] = "_AURA_REFRESH",
+    [6] = "_CAST_START",
+    [7] = "_INTERRUPT",
+    [8] = "_DISPEL",
+    [9] = "_DISPEL_FAILED",
+    [10] = "_STOLEN",
+    [11] = "_DRAIN",
+    [12] = "_LEECH"
+}
+CLEU_AUTOATTACK = {
+    RANGED_DAMAGE = true,
+    RANGED_MISSED = true,
+    SWING_DAMAGE = true,
+    SWING_MISSED = true
+}
+EVENTS_UNIT_REMOVED = {
+    UNIT_DESTROYED = true,
+    UNIT_DIED = true,
+    UNIT_DISSIPATES = true
+}
+EVENTS_MISS = {
+    RANGED_MISSED = true,
+    SWING_MISSED = true,
+    SPELL_MISSED = true
+}
+MISS_TYPES = {
+    ABSORB = true,
+    BLOCK = true,
+    DEFLECT = true,
+    DODGE = true,
+    EVADE = true,
+    IMMUNE = true,
+    MISS = true,
+    PARRY = true,
+    REFLECT = true,
+    RESIST = true,
+}
+
+b_SPELLCAST_SUCCEEDED = { }
+b_last_SPELLCAST_SUCCEEDED = nil
+b_SPELLCAST_SEND = { }
+function b_is_last_SPELLCAST_SUCCEEDED(spellID)
+    return b_last_SPELLCAST_SUCCEEDED == spellID
+end
+function b_check_SPELLCAST_SUCCEEDED(spellID)
+    local value = b_SPELLCAST_SUCCEEDED[spellID];
+    if (value == nil) then return 9999; end
+    return GetTime()- value;
+end
+function b_check_SPELLCAST_SEND(spellID)
+    local value = b_SPELLCAST_SEND[spellID];
+    if (value == nil) then return 9999; end
+    return GetTime()- value;
+end
+
+local band = bit.band
+local bor = bit.bor
+local GROUP_MEMBER = bor(COMBATLOG_OBJECT_AFFILIATION_MINE, COMBATLOG_OBJECT_AFFILIATION_PARTY, COMBATLOG_OBJECT_AFFILIATION_RAID)
+function IsFriendly(unitFlags, isGroupMember)
+    return band(unitFlags, COMBATLOG_OBJECT_REACTION_FRIENDLY) > 0 and ( not isGroupMember or band(unitFlags, GROUP_MEMBER) > 0)
+end
+
+function isPlayer(unit)
+    return (unit == UnitGUID("player")) or (unit == UnitGUID("pet"))
+end
+
+function IsTagEvent(cleuEvent)
+    local isTagEvent = false
+    if CLEU_AUTOATTACK[cleuEvent] then
+        isTagEvent = true
+    else
+        for _, suffix in ipairs(CLEU_TAG_SUFFIXES) do
+            if string.find(cleuEvent, suffix .. "$") then
+                isTagEvent = true
+                break
+            end
+        end
+    end
+    return isTagEvent
+end
+
+function addvalues(dest, source)
+    for key,_ in pairs(source) do
+        dest[key] = 1
+    end
+end
+
+function b_nameplateCount(enemyModek, IsCombatModek)
+    local result = 0
+    for i = 1, 40 do
+        local unit = "nameplate"..i
+        if UnitName(unit) then
+            local IsEnemy = UnitIsEnemy("player",unit) or UnitIsEnemy(unit,"player")
+            local IsCombat = UnitAffectingCombat(unit)
+            local inc = true
+            if enemyModek == 1 then inc = inc and not IsEnemy end
+            if enemyModek == 2 then inc = inc and IsEnemy end
+            if IsCombatModek == 1 then inc = inc and IsCombat end
+            if IsCombatModek == 2 then inc = inc and not IsCombat end
+            if inc then result = result + 1 end
+        end
+    end
+    return result
+end
+
+function b_getenemiescount(mode1, mode2)
+    local t = {};
+    if (mode1 == 0 and mode2 == 0) then 
+        addvalues(t, EnemyPlayerIn)
+        addvalues(t, EnemyPlayerOut)
+        addvalues(t, EnemyPartyIn)
+        addvalues(t, EnemyPartyOut)
+    end
+
+    if (mode1 == 0 and mode2 == 1) then 
+        addvalues(t, EnemyPlayerIn)
+        addvalues(t, EnemyPartyIn)
+    end
+
+    if (mode1 == 0 and mode2 == 2) then 
+        addvalues(t, EnemyPlayerOut)
+        addvalues(t, EnemyPartyOut)
+    end
+        
+    if (mode1 == 1 and mode2 == 0) then 
+        addvalues(t, EnemyPlayerIn)
+        addvalues(t, EnemyPlayerOut)
+    end
+
+    if (mode1 == 1 and mode2 == 1) then 
+        addvalues(t, EnemyPlayerIn)
+    end
+
+    if (mode1 == 1 and mode2 == 2) then 
+        addvalues(t, EnemyPlayerOut)
+    end
+
+    if (mode1 == 2 and mode2 == 0) then 
+        addvalues(t, EnemyPartyIn)
+        addvalues(t, EnemyPartyOut)
+    end
+
+    if (mode1 == 2 and mode2 == 1) then 
+        addvalues(t, EnemyPartyIn)
+    end
+
+    if (mode1 == 2 and mode2 == 2) then
+        addvalues(t, EnemyPartyOut)
+    end
+
+    local result = 0
+    for k,_ in pairs(t) do
+         result = result + 1
+    end
+
+    return result;
+end
+
+function b_getenemiescountpvp(mode1)
+    local t = {};
+    if (mode1 == 0) then 
+        addvalues(t, EnemyPlayerPVPIn)
+        addvalues(t, EnemyPlayerPVPOut)
+    end
+
+    if (mode1 == 1) then 
+        addvalues(t, EnemyPlayerPVPIn)
+    end
+
+    if (mode1 == 2) then 
+        addvalues(t, EnemyPlayerPVPOut)
+    end
+
+    local result = 0
+    for k,_ in pairs(t) do
+         result = result + 1
+    end
+
+    return result;
+end
+
+function b_getenemieswithdotscount(spellName)
+    local result = 0;
+    if EnemyWithDot[spellName] ~= nil then
+        for k,_ in pairs(EnemyWithDot[spellName]) do
+            result = result + 1;
+        end
+    end
+    return result;
+end
+
+function b_getTimeUnitNotBehind(target)
+    local result = 9999;
+    if TargetNotBehind[UnitGUID(target)] ~= nil then
+        result = GetTime() - TargetNotBehind[UnitGUID(target)];
+    end
+    return result;
+end
+
+function b_getTimeNotInFront(target)
+    local result = 9999;
+    if TargetNotInFront[UnitGUID(target)] ~= nil then
+        result = GetTime() - TargetNotInFront[UnitGUID(target)];
+    end
+    return result;
+end
+
+function b_getTimeUnitNotInFront(target)
+    local result = 9999;
+    if TargetUnitNotInFront[UnitGUID(target)] ~= nil then
+        result = GetTime() - TargetUnitNotInFront[UnitGUID(target)];
+    end
+    return result;
+end
+
+function b_getTimeUnitWallBlock(target)
+    local result = 9999;
+    if TargetWallBlock[UnitGUID(target)] ~= nil then
+        result = GetTime() - TargetWallBlock[UnitGUID(target)];
+    end
+    return result;
+end
+
+function b_getTimeUnitImmune(target)
+    local result = 9999;
+    if TargetImmune[UnitGUID(target)] ~= nil then
+        result = GetTime() - TargetImmune[UnitGUID(target)];
+    end
+    return result;
+end
+
+function b_getTimeStuned()
+    local result = 9999;
+    if PlayerStuned > 0 then
+        result = GetTime() - PlayerStuned;
+    end
+    return result;
+end
+
+function b_getTimeSilenced()
+    local result = 9999;
+    if PlayerSilenced > 0 then
+        result = GetTime() - PlayerSilenced;
+    end
+    return result;
+end
+
+function b_getTimeNotInControl()
+    local result = 9999;
+    if PlayerNotInControl > 0 then
+        result = GetTime() - PlayerNotInControl;
+    end
+    return result;
+end
+
+function b_getEnemyCountSpellDamage(SpellName,seconds)
+    local now = time();
+    local unitCount = 0;
+    if seconds == nil then seconds = 3; end
+    if (EnemyCountSpellDamage[SpellName] ~= nil) then
+        for timestamp,_ in pairs(EnemyCountSpellDamage[SpellName]) do
+            local passedTime = (now - timestamp);
+            if (passedTime > 10) then EnemyCountSpellDamage[SpellName][timestamp] = {}; end
+            if (passedTime <= seconds) then
+                for key,value in pairs(EnemyCountSpellDamage[SpellName][timestamp]) do
+                    if value == 1 then
+                        unitCount = unitCount + 1;
+                    end
+                end
+            end
+        end
+    end
+    return unitCount;
+end
+
+function b_getFriendCountSpellHeal(SpellName,seconds)
+    local now = time();
+    local unitCount = 0;
+    if seconds == nil then seconds = 3; end
+    if (FriendCountSpellHeal[SpellName] ~= nil) then
+        for timestamp,_ in pairs(FriendCountSpellHeal[SpellName]) do
+            if ((now - timestamp) > seconds) then
+                FriendCountSpellHeal[SpellName][timestamp] = {};
+            else
+                for key,value in pairs(FriendCountSpellHeal[SpellName][timestamp]) do
+                    if value == 1 then
+                        unitCount = unitCount + 1;
+                    end
+                end
+            end
+        end
+    end
+    return unitCount;
+end
+
+function b_getTimeLastBattleStart()
+    return GetTime() - b_LastBattleStart;
+end
+
+function updateenemies()
+    local now = GetTime();
+    for key,value in pairs(EnemyLastSeen) do
+        if value ~= nil then
+            if (difftime(now, value) > 5) then
+                RemoveEnemy(key);
+            end
+        end
+    end
+end
+
+function updateenemieswithdots()
+    local now = GetTime();
+    for keyDot,Dot in pairs(EnemyWithDot) do
+        for keyGuid,lasttime in pairs(Dot) do
+            if lasttime ~= nil then
+                if (difftime(now, lasttime) > 3) then
+                    RemoveEnemyWithDot(keyGuid,keyDot);
+                end
+            end
+        end
+    end
+end
+
+function getTypeUnitByGuid(guid)
+    if checkVersionOld(1,5) then
+        local B = tonumber(guid:sub(5,5), 16);
+        local maskedB = B % 8; -- x % 8 has the same effect as x & 0x7 on numbers <= 0xf
+        local knownTypes = {[0]="Player", [1]="GameObject", [3]="Creature", [4]="Pet", [5]="Vehicle"};
+        return (knownTypes[maskedB] or "Unknown");
+    else
+        local type = strsplit("-",guid);
+        return type;
+    end
+end
+
+function getUnitMissTime(unit, missType, isSource)
+    local result = 9999;
+    if (unit ~= nil and missType ~= nil and isSource ~= nil) then
+        local guid = UnitGUID(unit);
+        if (isSource and UnitMissFromUnit[guid..missType] ~= nil) then
+            result = GetTime() - UnitMissFromUnit[guid..missType];
+        end
+        if (not isSource and UnitMissToUnit[guid..missType] ~= nil) then
+            result = GetTime() - UnitMissToUnit[guid..missType];
+        end
+    end
+    return result;
+end
+
+function AddEnemy(guid, IsPlayer, IsIn)
+    if guid == nil then return end
+
+    if (IsPlayer and IsIn) then EnemyPlayerIn[guid] = 1; end
+    if (IsPlayer and not IsIn) then EnemyPlayerOut[guid] = 1; end
+    if (not IsPlayer and IsIn) then EnemyPartyIn[guid] = 1; end
+    if (not IsPlayer and not IsIn) then EnemyPartyOut[guid] = 1; end
+    if (getTypeUnitByGuid(guid) == "Player" and IsPlayer) then
+        if IsIn then EnemyPlayerPVPIn[guid] = 1;
+        else EnemyPlayerPVPOut[guid] = 1; end
+    end
+
+    EnemyLastSeen[guid] = GetTime();
+end
+
+function RemoveEnemy(guid)
+    if guid == nil then return end
+    EnemyLastSeen[guid] = nil;
+    EnemyPlayerIn[guid] = nil;
+    EnemyPlayerOut[guid] = nil;
+    EnemyPartyIn[guid] = nil;
+    EnemyPartyOut[guid] = nil;
+    TargetNotBehind[guid] = nil;
+    TargetNotInFront[guid] = nil;
+    TargetUnitNotInFront[guid] = nil;
+    TargetWallBlock[guid] = nil;
+    TargetImmune[guid] = nil;
+    if (getTypeUnitByGuid(guid) == "Player") then
+        EnemyPlayerPVPIn[guid] = nil;
+        EnemyPlayerPVPOut[guid] = nil;
+    end
+end
+
+function AddEnemyWithDot(guid, spellName)
+    if guid == nil then return end
+    if EnemyWithDot[spellName] == nil then
+        EnemyWithDot[spellName] = {};
+    end
+    EnemyWithDot[spellName][guid] = GetTime();
+end
+
+function RemoveEnemyWithDot(guid, spellName)
+    if guid == nil then return end
+    if spellName == nil then
+        for keyDot,Dot in pairs(EnemyWithDot) do
+            if EnemyWithDot[keyDot][guid] ~= nil then
+                EnemyWithDot[keyDot][guid] = nil;
+            end
+        end
+    else
+        if EnemyWithDot[spellName] ~= nil then
+            EnemyWithDot[spellName][guid] = nil;
+        end
+    end
+end
+
+function AddTargetNotBehind(guid)
+    TargetNotBehind[guid] = GetTime();
+end
+
+function AddTargetNotInFront(guid)
+    TargetNotInFront[guid] = GetTime();
+end
+
+function AddTargetUnitNotInFront(guid)
+    TargetUnitNotInFront[guid] = GetTime();
+end
+
+function AddTargetWallBlock(guid)
+    TargetWallBlock[guid] = GetTime();
+end
+
+function AddTargetImmune(guid)
+    TargetImmune[guid] = GetTime();
+end
+
+function AddUnitMiss(sourceGUID, destGUID, missType)
+    if (sourceGUID == nil or destGUID == nil or missType == nil) then return end
+    UnitMissFromUnit[sourceGUID..missType] = GetTime();
+    UnitMissToUnit[destGUID..missType] = GetTime();
+end
+
+local EventsFrame = CreateFrame("Button", "EventsFrame", UIParent)
+EventsFrame:RegisterEvent("UI_ERROR_MESSAGE")
+EventsFrame:RegisterEvent("UNIT_SPELLCAST_SUCCEEDED")
+EventsFrame:RegisterEvent("COMBAT_LOG_EVENT_UNFILTERED")
+EventsFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
+EventsFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
+EventsFrame:RegisterEvent("PLAYER_ENTERING_WORLD")
+EventsFrame:RegisterEvent("PLAYER_LEVEL_UP")
+EventsFrame:RegisterEvent("PLAYER_TALENT_UPDATE")
+EventsFrame:RegisterEvent("CHARACTER_POINTS_CHANGED")
+if checkVersionOld(5) or checkVersionNew(5) then
+    EventsFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
+end
+if checkVersionNew(10) then
+    EventsFrame:RegisterEvent("ACTIVE_PLAYER_SPECIALIZATION_CHANGED");
+    EventsFrame:RegisterEvent("TRAIT_CONFIG_UPDATED");
+end
+EventsFrame:SetScript("OnEvent", 
+    function(self, event, ...)
+        if event == "UNIT_SPELLCAST_SUCCEEDED" then
+            local unit, spellID, spellName, spellRank;
+            if checkVersionOld(1,3) then
+                unit, spellName, spellRank = ...;
+                spellID = MyGetSpellID(spellName, spellRank)
+            elseif checkVersionOld(4,7) then
+                unit, _, _, _, spellID = ...;
+            else
+                unit, _, spellID = ...;
+            end
+            if spellID and unit == "player" then
+                b_SPELLCAST_SUCCEEDED[spellID] = GetTime()
+                b_last_SPELLCAST_SUCCEEDED = spellID
+            end
+        end
+
+        if event == "COMBAT_LOG_EVENT_UNFILTERED" then
+            local timestamp, cleuEvent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellId, spellName, spellSchool, param15, param16, param17, param18, param19, param20;
+            if checkVersionOld(1,3) then
+                timestamp, cleuEvent, sourceGUID, sourceName, sourceFlags, destGUID, destName, destFlags, spellId, spellName, spellSchool, param15, param16, param17, param18, param19, param20 = ...;
+            elseif checkVersionOld(4,7) then
+                timestamp, cleuEvent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellId, spellName, spellSchool, param15, param16, param17, param18, param19, param20 = ...;
+            else
+                timestamp, cleuEvent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellId, spellName, spellSchool, param15, param16, param17, param18, param19, param20 = CombatLogGetCurrentEventInfo();
+            end
+
+            if (cleuEvent and cleuEvent == "SPELL_CAST_FAILED") then -- and isPlayer(sourceGUID)
+                --MyPrint("SPELL_CAST_FAILED: "..timestamp, cleuEvent, hideCaster, sourceGUID, sourceName, sourceFlags, sourceRaidFlags, destGUID, destName, destFlags, destRaidFlags, spellId, spellName, spellSchool, param15, param16, param17, param18, param19, param20);
+                
+                if isPlayer(sourceGUID) then -- start
+                local targetUnit = "target";
+                if (LastTarget ~= nil) then targetUnit = LastTarget; end
+                if param15 == SPELL_FAILED_UNIT_NOT_INFRONT then
+                    b_Log("UnitNotInFront: "..sourceGUID, true);
+                    Timers["UnitNotInFront"..sourceGUID] = 0.6;
+                    AddTargetUnitNotInFront(sourceGUID);
+                end
+                if param15 == SPELL_FAILED_LINE_OF_SIGHT then
+                    b_Log("WallBlock: "..sourceGUID, true);
+                    Timers["WallBlock"..sourceGUID] = 0.6;
+                    AddTargetWallBlock(sourceGUID);
+                end
+                if param15 == SPELL_FAILED_NOT_INFRONT then
+                    b_Log("NotInfront: "..sourceGUID, true);
+                    AddTargetNotInFront(sourceGUID);
+                end
+                if param15 == SPELL_FAILED_NOT_BEHIND then
+                    b_Log("NotBehind: "..sourceGUID, true);
+                    AddTargetNotBehind(sourceGUID);
+                end
+                if param15 == SPELL_FAILED_IMMUNE then
+                    b_Log("UnitImmune: "..sourceGUID, true);
+                    AddTargetImmune(sourceGUID);
+                end
+                old1stun = "Действие невозможно. Причина: оглушение.";
+                old2stun = "Действие невозможно. Причина: ошеломление.";
+                if param15 == SPELL_FAILED_STUNNED or param15 == old1stun or param15 == old2stun then
+                    b_Log("PlayerStuned", true);
+                    PlayerStuned = GetTime();
+                end
+                if param15 == SPELL_FAILED_SILENCED then
+                    b_Log("PlayerSilenced", true);
+                    PlayerSilenced = GetTime();
+                end
+                if param15 == SPELL_FAILED_NOT_IN_CONTROL then
+                    b_Log("PlayerNotInControl", true);
+                    PlayerNotInControl = GetTime();
+                end
+                end --end
+            end
+            if ((cleuEvent == "SPELL_DAMAGE" or cleuEvent == "SPELL_PERIODIC_DAMAGE" or cleuEvent == "SPELL_AURA_APPLIED") and isPlayer(sourceGUID) and not isPlayer(destGUID) and not IsFriendly(destFlags)) then
+                if (EnemyCountSpellDamage[spellName] == nil or EnemyCountSpellDamage[spellName][timestamp] == nil) then
+                    EnemyCountSpellDamage[spellName] = { [timestamp] = {} };
+                end
+                EnemyCountSpellDamage[spellName][timestamp][destGUID] = 1;
+            end
+            if ((cleuEvent == "SPELL_HEAL" or cleuEvent == "SPELL_PERIODIC_HEAL" or cleuEvent == "SPELL_AURA_APPLIED") and isPlayer(sourceGUID) and IsFriendly(destFlags)) then
+                if (FriendCountSpellHeal[spellName] == nil or FriendCountSpellHeal[spellName][timestamp] == nil) then
+                    FriendCountSpellHeal[spellName] = { [timestamp] = {} };
+                end
+                FriendCountSpellHeal[spellName][timestamp][destGUID] = 1;
+            end
+            if cleuEvent and EVENTS_UNIT_REMOVED[cleuEvent] then RemoveEnemy(destGUID); RemoveEnemyWithDot(destGUID); end
+            if (cleuEvent and EVENTS_MISS[cleuEvent] and MISS_TYPES[spellId]) then
+                if (isPlayer(sourceGUID) or isPlayer(destGUID)) then
+                    AddUnitMiss(sourceGUID,destGUID,spellId);
+                end
+            end
+            if (cleuEvent and cleuEvent == "SWING_DAMAGE") then
+                if (isPlayer(sourceGUID) or isPlayer(destGUID)) then
+                    if (param15 ~= nil and param15 > 0) then AddUnitMiss(sourceGUID,destGUID,"RESIST"); end
+                    if (param16 ~= nil and param16 > 0) then AddUnitMiss(sourceGUID,destGUID,"BLOCK"); end
+                    if (param17 ~= nil and param17 > 0) then AddUnitMiss(sourceGUID,destGUID,"ABSORB"); end
+                end
+            end
+            if (cleuEvent and cleuEvent == "SPELL_DAMAGE") then
+                if (isPlayer(sourceGUID) or isPlayer(destGUID)) then
+                    if (param18 ~= nil and param18 > 0) then AddUnitMiss(sourceGUID,destGUID,"RESIST"); end
+                    if (param19 ~= nil and param19 > 0) then AddUnitMiss(sourceGUID,destGUID,"BLOCK"); end
+                    if (param20 ~= nil and param20 > 0) then AddUnitMiss(sourceGUID,destGUID,"ABSORB"); end
+                end
+            end
+            if sourceGUID and sourceGUID ~= "" and sourceName and sourceFlags and destGUID and destGUID ~= "" and destName and destFlags then
+                if ((cleuEvent == "SPELL_AURA_REMOVED") and isPlayer(sourceGUID) and not isPlayer(destGUID) and not IsFriendly(destFlags)) then
+                    RemoveEnemyWithDot(destGUID, spellName);
+                elseif ((cleuEvent == "SPELL_PERIODIC_DAMAGE" or cleuEvent == "SPELL_AURA_APPLIED") and isPlayer(sourceGUID) and not isPlayer(destGUID) and not IsFriendly(destFlags)) then
+                    AddEnemyWithDot(destGUID, spellName);
+                end
+                if  not IsFriendly(sourceFlags) and IsFriendly(destFlags, true) then
+                    if  not (cleuEvent == "SPELL_PERIODIC_DAMAGE" and IsTagEvent(cleuEvent)) then
+                        AddEnemy(sourceGUID, isPlayer(destGUID), true)
+                    end
+                elseif IsFriendly(sourceFlags, true) and  not IsFriendly(destFlags) and IsTagEvent(cleuEvent) then
+                    AddEnemy(destGUID, isPlayer(sourceGUID), false)
+                end
+            end
+        end
+        if event == "PLAYER_REGEN_DISABLED" then
+            b_LastBattleStart = GetTime();
+            EnemyPlayerIn = {}
+            EnemyPlayerOut = {}
+            EnemyPartyIn = {}
+            EnemyPartyOut = {}
+            EnemyLastSeen = {}
+            -- EnemyWithDot = {}
+            -- EnemyPlayerPVPIn = {}
+            -- EnemyPlayerPVPOut = {}
+            -- EnemyCountSpellDamage = {}
+            -- FriendCountSpellHeal = {}
+            -- TargetNotBehind = {}
+            -- TargetNotInFront = {}
+            -- TargetUnitNotInFront = {}
+            -- TargetWallBlock = {}
+            -- UnitMissFromUnit = {}
+            -- UnitMissToUnit = {}
+        end
+        if event == "PLAYER_REGEN_ENABLED" then
+            b_LastBattleStart = 0;
+            EnemyPlayerIn = {}
+            EnemyPlayerOut = {}
+            EnemyPartyIn = {}
+            EnemyPartyOut = {}
+            EnemyLastSeen = {}
+            -- EnemyWithDot = {}
+            EnemyPlayerPVPIn = {}
+            EnemyPlayerPVPOut = {}
+            EnemyCountSpellDamage = {}
+            FriendCountSpellHeal = {}
+            TargetNotBehind = {}
+            TargetNotInFront = {}
+            TargetUnitNotInFront = {}
+            TargetWallBlock = {}
+            TargetImmune = {}
+            UnitMissFromUnit = {}
+            UnitMissToUnit = {}
+        end
+        if (event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_LEVEL_UP" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "PLAYER_TALENT_UPDATE" or event == "ACTIVE_PLAYER_SPECIALIZATION_CHANGED" or event == "TRAIT_CONFIG_UPDATED") then
+            SpellNotFound = {}
+            PlayerSpellBook = {}
+            CacheSpellIDs = {}
+            UpdateTalents();
+        end
+    end
+)
+
+
+cmdbtn0 = CreateFrame("Button",nil,UIParent)
+cmdbtn0:SetWidth(1) -- Set these to whatever height/width is needed 
+cmdbtn0:SetHeight(1) -- for your Texture
+
+cmd0 = cmdbtn0:CreateTexture(nil,"BACKGROUND")
+if checkVersionOld(1,6) then
+    cmd0:SetTexture(1,0,0)
+else
+    cmd0:SetColorTexture(1,0,0)
+end
+cmd0:SetAllPoints(cmdbtn0)
+cmdbtn0.texture = cmd0
+
+cmdbtn0:SetPoint("TOPLEFT",0,0)
+cmdbtn0:Show()
+
+cmdbtn1 = CreateFrame("Button",nil,UIParent)
+cmdbtn1:SetWidth(1) -- Set these to whatever height/width is needed 
+cmdbtn1:SetHeight(1) -- for your Texture
+
+cmd1 = cmdbtn1:CreateTexture(nil,"BACKGROUND")
+if checkVersionOld(1,6) then
+    cmd1:SetTexture(1,0,0)
+else
+    cmd1:SetColorTexture(1,0,0)
+end
+cmd1:SetAllPoints(cmdbtn1)
+cmdbtn1.texture = cmd1
+
+cmdbtn1:SetPoint("TOPLEFT",1,0)
+cmdbtn1:Show()
+
+cmdbtn0:SetScript("OnUpdate", bdps_OnUpdate)
+
+
+
+
+
+
+function SpellSelector()
+    
+
+
+end
+
+if (true) then SlashCmdList["BDD"] = handler; end
+
